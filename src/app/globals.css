@@ -1,26 +1,159 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
+  --malika-lime: #bef264;
+  --malika-green: #4ade80;
+  --malika-teal: #14b8a6;
+  --malika-cyan: #22d3ee;
+  --malika-blue: #3b82f6;
+  --malika-gradient: linear-gradient(135deg, #bef264 0%, #4ade80 30%, #14b8a6 62%, #3b82f6 100%);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 110px;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* lapisan gradient fluid: fixed, tipis, bergerak pelan */
+.fluid-bg {
+  background: #f5f5f7;
+}
+
+.fluid-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.fluid-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  will-change: transform;
+}
+
+.fluid-blob-1 {
+  width: 44vw;
+  height: 44vw;
+  left: -10vw;
+  top: -12vw;
+  background: radial-gradient(circle, rgba(190, 242, 100, 0.28), transparent 70%);
+  animation: drift-1 22s ease-in-out infinite alternate;
+}
+
+.fluid-blob-2 {
+  width: 40vw;
+  height: 40vw;
+  right: -12vw;
+  top: 22vh;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.18), transparent 70%);
+  animation: drift-2 26s ease-in-out infinite alternate;
+}
+
+.fluid-blob-3 {
+  width: 46vw;
+  height: 46vw;
+  left: 20vw;
+  bottom: -18vw;
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.16), transparent 70%);
+  animation: drift-3 30s ease-in-out infinite alternate;
+}
+
+@keyframes drift-1 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(9vw, 12vh) scale(1.15); }
+}
+@keyframes drift-2 {
+  from { transform: translate(0, 0) scale(1.1); }
+  to { transform: translate(-8vw, 10vh) scale(0.95); }
+}
+@keyframes drift-3 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(6vw, -10vh) scale(1.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fluid-blob-1, .fluid-blob-2, .fluid-blob-3 {
+    animation: none;
+  }
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 8px 32px rgba(29, 29, 31, 0.08);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 12px 40px rgba(29, 29, 31, 0.1);
+}
+
+/* subtle scrollbar for demo panels */
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 999px;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+.live-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.feed-in {
+  animation: feed-in 0.35s ease-out both;
+}
+
+.malika-gradient {
+  background: var(--malika-gradient);
+}
+.malika-gradient-text {
+  background: var(--malika-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
