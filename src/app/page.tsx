@@ -27,8 +27,9 @@ export default function Home() {
               Biarkan agent yang kerja.
             </h2>
             <p className="mx-auto mt-3 max-w-lg text-sm text-stone-600">
-              Sudah saatnya Agent AI kerja tanpa ditungguin, dipantengin. Kasih jadwal kerjaan,
-              tinggalin, selesai!
+              Sudah saatnya Agent AI kerja tanpa ditungguin, dipantengin.
+              <br />
+              Kasih jadwal kerjaan, tinggalin, selesai!
             </p>
             <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
               <a
