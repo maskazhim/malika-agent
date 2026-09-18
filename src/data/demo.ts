@@ -439,7 +439,6 @@ export const PRICING = [
     period: "/bulan",
     desc: "Untuk bisnis bertumbuh dengan beberapa tim operasional.",
     features: [
-      "Semua di paket Starter, plus:",
       "3× kuota Starter",
       "6 komputer aktif 24 jam",
       "Unlimited rutinitas",
@@ -457,7 +456,6 @@ export const PRICING = [
     period: "/bulan",
     desc: "Untuk multi-cabang & volume kerja operasional tinggi.",
     features: [
-      "Semua di paket Growth, plus:",
       "9× kuota Starter",
       "12 komputer aktif 24 jam",
       "Unlimited rutinitas",
