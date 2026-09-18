@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PRICING } from "@/data/demo";
 import { formatRp } from "@/lib/qris";
+import { newOrderId, saveOrder } from "@/lib/orders";
 
 const AMOUNTS: Record<string, number> = {
   Starter: 1799000,
@@ -45,10 +46,21 @@ export default function Pricing() {
       return;
     }
     setError(null);
+    const product = open ?? "";
+    const order_id = newOrderId();
     const q = new URLSearchParams({
-      product: open ?? "",
-      amount: String(AMOUNTS[open ?? ""] ?? 0),
+      product,
+      amount: String(AMOUNTS[product] ?? 0),
+      order_id,
       ...f,
+    });
+    // Simpan order tahap checkout ke D1 (fallback localStorage bila API belum siap).
+    void saveOrder({
+      order_id,
+      product,
+      amount: AMOUNTS[product] ?? 0,
+      ...f,
+      status: "checkout",
     });
     setOpen(null);
     router.push(`/payment?${q.toString()}`);
@@ -61,8 +73,8 @@ export default function Pricing() {
     <section id="harga" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-12 sm:px-6">
       <h2 className="text-center text-3xl font-semibold tracking-tight sm:text-4xl">Paket Harga</h2>
       <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-stone-600 sm:text-base">
-        Bayar bulanan via QRIS. Klik pilih — isi form — langsung dapat QR dengan nominal
-        yang sudah disesuaikan.
+        Bayar bulanan via QRIS / Transfer Bank. Klik pilih — isi form — lanjut ke
+        halaman pembayaran.
       </p>
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
         {PRICING.map((p) => (
@@ -148,7 +160,7 @@ export default function Pricing() {
               ))}
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>}
               <button type="submit" className="malika-gradient w-full rounded-full py-2.5 text-sm font-semibold text-white transition hover:opacity-90">
-                Lanjut ke Pembayaran QRIS →
+                Lanjut ke Pembayaran →
               </button>
             </form>
           </div>
