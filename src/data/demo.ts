@@ -350,6 +350,26 @@ export const AGENTS: AgentDemo[] = [
   },
 ];
 
+export interface ShowcaseVideo {
+  id: string;
+  youtubeId: string;
+  title: string;
+  desc: string;
+  badge: string;
+  duration: string;
+}
+
+export const SHOWCASE_VIDEOS: ShowcaseVideo[] = [
+  {
+    id: "content-researcher",
+    youtubeId: "CMWUcbHz8aI",
+    title: "Content Researcher — Malika Agent",
+    desc: "Lihat gimana Malika Agent riset konten secara otomatis: dari riset topik sampai jadi bahan konten siap pakai.",
+    badge: "Riset Konten",
+    duration: "YouTube",
+  },
+];
+
 export const USP = [
   {
     title: "Komputer sendiri, 24/7",
