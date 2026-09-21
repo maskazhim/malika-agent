@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
 
@@ -42,16 +42,35 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Batal",
 };
 
+interface ClientAccess {
+  id: number;
+  order_id: string;
+  client_name: string;
+  access_url: string;
+  email: string;
+  email_status: string;
+  created_at: string;
+}
+
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
-  const [view, setView] = useState<"orders" | "pricing" | "logs" | "clients">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Menu titik-tiga + panel kredensial per order
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [clients, setClients] = useState<ClientAccess[]>([]);
+  const [credFor, setCredFor] = useState<string | null>(null);
+  const [credForm, setCredForm] = useState({ access_url: "", email: "", password: "" });
+  const [credSending, setCredSending] = useState(false);
+  const [credMsg, setCredMsg] = useState<string | null>(null);
+  const [sentCred, setSentCred] = useState<Record<string, { access_url: string; email: string; password: string }>>({});
 
   const load = useCallback(
     async (status: string) => {
@@ -83,6 +102,13 @@ export default function AdminPage() {
         else {
           setAuth("ok");
           void load("");
+          // Daftar akses klien (untuk panel kredensial per order).
+          fetch("/api/clients")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { clients?: ClientAccess[] } | null) => {
+              if (data?.clients) setClients(data.clients);
+            })
+            .catch(() => {});
         }
       })
       .catch(() => router.replace("/login"));
@@ -121,6 +147,7 @@ export default function AdminPage() {
 
   async function removeOrder(order_id: string) {
     if (!window.confirm("Hapus order ini permanen? Kode uniknya ikut dibebaskan.")) return;
+    setMenuFor(null);
     setDeleting(order_id);
     try {
       const res = await fetch(`/api/orders?order_id=${encodeURIComponent(order_id)}`, { method: "DELETE" });
@@ -136,6 +163,82 @@ export default function AdminPage() {
       setDeleting(null);
     }
   }
+
+  // Buka panel kirim credential untuk satu order (hanya order verified).
+  function openCred(o: Order) {
+    setMenuFor(null);
+    setCredMsg(null);
+    const existing = clients.find((c) => c.order_id === o.order_id);
+    setCredForm({
+      access_url: existing?.access_url ?? "",
+      email: existing?.email || o.email,
+      password: "",
+    });
+    setCredFor(o.order_id);
+  }
+
+  // Kirim credential: simpan akses + email otomatis ke email order.
+  async function sendCred(o: Order) {
+    setCredSending(true);
+    setCredMsg(null);
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_name: o.nama,
+          access_url: credForm.access_url,
+          email: credForm.email,
+          password: credForm.password,
+          order_id: o.order_id,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        id?: number;
+        error?: string;
+        email_status?: string;
+        email_error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setClients((cs) => [
+        {
+          id: data.id ?? 0,
+          order_id: o.order_id,
+          client_name: o.nama,
+          access_url: credForm.access_url,
+          email: credForm.email,
+          email_status: data.email_status ?? "sent",
+          created_at: new Date().toISOString(),
+        },
+        ...cs.filter((c) => c.order_id !== o.order_id),
+      ]);
+      // Tampilkan detail yang baru dikirim di bawah order.
+      setSentCred((s) => ({
+        ...s,
+        [o.order_id]: { access_url: credForm.access_url, email: credForm.email, password: credForm.password },
+      }));
+      setCredForm((f) => ({ ...f, password: "" }));
+      setCredMsg(
+        data.email_status === "sent"
+          ? "Email credential terkirim ke klien."
+          : `Akses tersimpan, tapi email gagal (${data.email_error ?? "unknown"}).`
+      );
+    } catch (err) {
+      setCredMsg(err instanceof Error ? err.message : "Gagal mengirim credential.");
+    } finally {
+      setCredSending(false);
+    }
+  }
+
+  const visibleOrders = orders.filter((o) => {
+    const s = search.trim().toLowerCase();
+    if (!s) return true;
+    return [o.nama, o.email, o.telepon, o.bisnis, o.product, o.order_id]
+      .join(" ")
+      .toLowerCase()
+      .includes(s);
+  });
 
   if (auth === "checking") {
     return <main className="mx-auto max-w-6xl px-4 py-20 text-center text-sm text-stone-500">Memeriksa sesi…</main>;
@@ -157,7 +260,7 @@ export default function AdminPage() {
       </div>
 
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "pricing", "logs", "clients"] as const).map((v) => (
+        {(["orders", "pricing", "logs"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -165,7 +268,7 @@ export default function AdminPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : "Akses Klien"}
+            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : "Log Pembayaran"}
           </button>
         ))}
       </div>
@@ -174,8 +277,6 @@ export default function AdminPage() {
         <PricingManager />
       ) : view === "logs" ? (
         <PaymentLogs />
-      ) : view === "clients" ? (
-        <ClientsManager />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -198,11 +299,31 @@ export default function AdminPage() {
         </p>
       )}
 
+      <div className="glass mt-4 flex items-center gap-2 rounded-2xl p-2">
+        <span className="pl-2 text-sm text-stone-400">🔍</span>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cari order: nama, email, telepon, bisnis, produk, order ID…"
+          className="w-full bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-stone-400"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch("")}
+            className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
       <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
         {loading ? (
           <p className="p-8 text-center text-sm text-stone-500">Memuat order…</p>
-        ) : orders.length === 0 ? (
-          <p className="p-8 text-center text-sm text-stone-500">Belum ada order pada filter ini.</p>
+        ) : visibleOrders.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">
+            {orders.length === 0 ? "Belum ada order pada filter ini." : "Tidak ada order yang cocok dengan pencarian."}
+          </p>
         ) : (
           <table className="w-full min-w-3xl text-left text-sm">
             <thead>
@@ -216,8 +337,13 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
-                <tr key={o.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+              {visibleOrders.map((o) => {
+                const existing = clients.find((c) => c.order_id === o.order_id);
+                const sent = sentCred[o.order_id];
+                const expanded = credFor === o.order_id;
+                return (
+                <Fragment key={o.order_id}>
+                <tr className="border-b border-white/50 last:border-0 hover:bg-white/40">
                   <td className="px-4 py-3">
                     <p className="font-semibold">{o.product}</p>
                     <p className="font-mono text-[11px] text-stone-400">{o.order_id.slice(0, 8)}…</p>
@@ -225,6 +351,11 @@ export default function AdminPage() {
                       {o.method === "transfer" ? "Transfer Bank" : o.method === "qris" ? "QRIS" : "-"} ·{" "}
                       {o.created_at ? new Date(o.created_at).toLocaleString("id-ID") : "-"}
                     </p>
+                    {existing && (
+                      <p className="mt-0.5 inline-block rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                        akses {existing.email_status === "sent" ? "terkirim" : existing.email_status}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium">{o.nama}</p>
@@ -250,36 +381,146 @@ export default function AdminPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1.5">
-                      {o.status === "payment_proof" && (
-                        <button
-                          onClick={() => setStatus(o.order_id, "verified")}
-                          disabled={updating === o.order_id}
-                          className="malika-gradient rounded-full px-3 py-1.5 text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-60"
-                        >
-                          {updating === o.order_id ? "…" : "Verifikasi"}
-                        </button>
-                      )}
-                      {o.status !== "cancelled" && o.status !== "verified" && (
-                        <button
-                          onClick={() => setStatus(o.order_id, "cancelled")}
-                          disabled={updating === o.order_id}
-                          className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-red-600 ring-1 ring-white hover:bg-white disabled:opacity-60"
-                        >
-                          Batal
-                        </button>
-                      )}
+                    <div className="relative">
                       <button
-                        onClick={() => removeOrder(o.order_id)}
-                        disabled={deleting === o.order_id}
-                        className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                        onClick={() => setMenuFor(menuFor === o.order_id ? null : o.order_id)}
+                        aria-label="Menu aksi"
+                        className="flex h-8 w-8 items-center justify-center rounded-full bg-white/70 text-base font-bold tracking-widest text-stone-600 ring-1 ring-white hover:bg-white"
                       >
-                        {deleting === o.order_id ? "…" : "Hapus"}
+                        ⋮
                       </button>
+                      {menuFor === o.order_id && (
+                        <>
+                          <button
+                            aria-label="Tutup menu"
+                            onClick={() => setMenuFor(null)}
+                            className="fixed inset-0 z-10 cursor-default"
+                          />
+                          <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-stone-200">
+                            {o.status === "payment_proof" && (
+                              <button
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  void setStatus(o.order_id, "verified");
+                                }}
+                                disabled={updating === o.order_id}
+                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-60"
+                              >
+                                {updating === o.order_id ? "…" : "✓ Verifikasi"}
+                              </button>
+                            )}
+                            {o.status === "verified" && (
+                              <button
+                                onClick={() => openCred(o)}
+                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-800 hover:bg-stone-100"
+                              >
+                                ✉ Kirim credential
+                              </button>
+                            )}
+                            {o.status !== "cancelled" && o.status !== "verified" && (
+                              <button
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  void setStatus(o.order_id, "cancelled");
+                                }}
+                                disabled={updating === o.order_id}
+                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+                              >
+                                Batal
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removeOrder(o.order_id)}
+                              disabled={deleting === o.order_id}
+                              className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                            >
+                              {deleting === o.order_id ? "…" : "Hapus"}
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>
-              ))}
+                {expanded && (
+                  <tr className="border-b border-white/50 bg-teal-50/40">
+                    <td colSpan={6} className="px-4 py-4">
+                      <div className="rounded-2xl bg-white/80 p-4 ring-1 ring-white">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold">Kirim credential akses</p>
+                          <button
+                            onClick={() => {
+                              setCredFor(null);
+                              setCredMsg(null);
+                            }}
+                            className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-white hover:bg-white"
+                            aria-label="Tutup"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        {existing && !sent && (
+                          <p className="mt-1 text-xs text-stone-500">
+                            Sudah pernah dikirim ke <span className="font-semibold">{existing.email}</span> ({existing.email_status}).
+                            Isi ulang untuk kirim lagi / perbarui.
+                          </p>
+                        )}
+                        {sent && (
+                          <div className="mt-2 rounded-xl bg-teal-50 p-3 text-xs ring-1 ring-teal-100">
+                            <p className="font-bold text-teal-800">Terkirim — detail di bawah ini:</p>
+                            <dl className="mt-1 space-y-0.5">
+                              <div className="flex gap-2"><dt className="w-20 text-stone-500">URL akses</dt><dd className="font-semibold">{sent.access_url}</dd></div>
+                              <div className="flex gap-2"><dt className="w-20 text-stone-500">Email</dt><dd className="font-semibold">{sent.email}</dd></div>
+                              <div className="flex gap-2"><dt className="w-20 text-stone-500">Password</dt><dd className="font-mono font-semibold">{sent.password}</dd></div>
+                            </dl>
+                          </div>
+                        )}
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          <label className="block">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">URL akses</span>
+                            <input
+                              value={credForm.access_url}
+                              onChange={(e) => setCredForm((f) => ({ ...f, access_url: e.target.value }))}
+                              placeholder="kopi.malika.ai"
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">Email (dari order)</span>
+                            <input
+                              value={credForm.email}
+                              onChange={(e) => setCredForm((f) => ({ ...f, email: e.target.value }))}
+                              type="email"
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">Password</span>
+                            <input
+                              value={credForm.password}
+                              onChange={(e) => setCredForm((f) => ({ ...f, password: e.target.value }))}
+                              placeholder="min. 8 karakter"
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                            />
+                          </label>
+                        </div>
+                        {credFor === o.order_id && credMsg && (
+                          <p className="mt-2 text-xs font-medium text-stone-600">{credMsg}</p>
+                        )}
+                        <button
+                          onClick={() => sendCred(o)}
+                          disabled={credSending}
+                          className="malika-gradient mt-3 rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                        >
+                          {credSending ? "Mengirim…" : "✉ Simpan + kirim email credential"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -423,175 +664,6 @@ function PaymentLogs() {
   );
 }
 
-interface ClientRow {
-  id: number;
-  order_id: string;
-  client_name: string;
-  access_url: string;
-  email: string;
-  email_status: string;
-  created_at: string;
-}
-
-function ClientsManager() {
-  const [clients, setClients] = useState<ClientRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [form, setForm] = useState({ client_name: "", access_url: "", email: "", password: "", order_id: "" });
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/clients");
-      if (!res.ok) throw new Error("gagal");
-      const data = (await res.json()) as { clients?: ClientRow[] };
-      setClients(data.clients ?? []);
-    } catch {
-      setMsg("Gagal memuat akses klien.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setMsg(null);
-    try {
-      const res = await fetch("/api/clients", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const data = (await res.json()) as { ok?: boolean; error?: string; email_status?: string; email_error?: string };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
-      setForm({ client_name: "", access_url: "", email: "", password: "", order_id: "" });
-      setMsg(
-        data.email_status === "sent"
-          ? "Akses tersimpan + email detail terkirim ke klien."
-          : `Akses tersimpan, tapi email gagal (${data.email_error ?? "unknown"}). Cek RESEND_API_KEY.`
-      );
-      void load();
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function remove(id: number) {
-    if (!window.confirm("Hapus akses klien ini?")) return;
-    try {
-      const res = await fetch(`/api/clients?id=${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("gagal");
-      setClients((cs) => cs.filter((c) => c.id !== id));
-    } catch {
-      setMsg("Gagal menghapus.");
-    }
-  }
-
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((s) => ({ ...s, [k]: e.target.value }));
-
-  return (
-    <div className="mt-4 space-y-3">
-      {msg && (
-        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
-      )}
-      <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
-        <h2 className="text-base font-bold">Buat akses klien baru</h2>
-        <p className="mt-1 text-xs text-stone-500">
-          URL boleh input singkat (cth. <code>kopi.malika.ai</code>) — otomatis jadi https://. Setelah disimpan,
-          email berisi URL + email + password langsung terkirim ke klien.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-stone-500">Nama klien</span>
-            <input value={form.client_name} onChange={set("client_name")} placeholder="cth. Kopi Nusantara" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-stone-500">URL akses</span>
-            <input value={form.access_url} onChange={set("access_url")} placeholder="cth. kopi.malika.ai" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-stone-500">Email klien</span>
-            <input value={form.email} onChange={set("email")} type="email" placeholder="cth. owner@kopi.id" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-stone-500">Password (min. 8 karakter)</span>
-            <input value={form.password} onChange={set("password")} type="text" placeholder="cth. Kopi-2026-Aman" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
-          </label>
-          <label className="block sm:col-span-2">
-            <span className="mb-1 block text-xs font-medium text-stone-500">Order ID terkait (opsional)</span>
-            <input value={form.order_id} onChange={set("order_id")} placeholder="cth. tempel order_id dari tabel Order" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 font-mono text-xs outline-none focus:border-teal-400" />
-          </label>
-        </div>
-        <button
-          type="submit"
-          disabled={saving}
-          className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
-        >
-          {saving ? "Menyimpan + mengirim email…" : "Simpan + kirim email akses"}
-        </button>
-      </form>
-
-      <div className="glass-strong overflow-x-auto rounded-3xl">
-        {loading ? (
-          <p className="p-8 text-center text-sm text-stone-500">Memuat akses klien…</p>
-        ) : clients.length === 0 ? (
-          <p className="p-8 text-center text-sm text-stone-500">Belum ada akses klien.</p>
-        ) : (
-          <table className="w-full min-w-3xl text-left text-sm">
-            <thead>
-              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
-                <th className="px-4 py-3 font-semibold">Klien</th>
-                <th className="px-4 py-3 font-semibold">Akses</th>
-                <th className="px-4 py-3 font-semibold">Email</th>
-                <th className="px-4 py-3 font-semibold">Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map((c) => (
-                <tr key={c.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
-                  <td className="px-4 py-3">
-                    <p className="font-semibold">{c.client_name}</p>
-                    <p className="text-[11px] text-stone-400">
-                      {c.created_at ? new Date(c.created_at).toLocaleString("id-ID") : "-"}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <a href={c.access_url} target="_blank" rel="noopener noreferrer" className="font-medium text-teal-700 hover:underline">
-                      {c.access_url.replace(/^https?:\/\//, "")}
-                    </a>
-                  </td>
-                  <td className="px-4 py-3">
-                    <p className="text-xs">{c.email}</p>
-                    <p className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${c.email_status === "sent" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
-                      {c.email_status === "sent" ? "email terkirim" : `email: ${c.email_status}`}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => remove(c.id)}
-                      className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600"
-                    >
-                      Hapus
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
 
 interface PlanRow {
   key: string;
