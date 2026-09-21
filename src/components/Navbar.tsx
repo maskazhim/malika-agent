@@ -29,11 +29,9 @@ export default function Navbar() {
   }, [open ]);
 
   return (
-    <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:pt-4">
-      {/* lapisan kaca di belakang navbar: konten yang lewat di bawah jadi blur */}
-      <div className="pointer-events-none absolute inset-0 bg-white/30 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_70%,transparent)]" />
+    <div className="fixed inset-x-0 top-3 z-50 px-3 sm:top-4">
       <div className="relative mx-auto w-full max-w-4xl">
-        <header className="glass-strong w-full rounded-full py-2 pl-4 pr-2 sm:pl-5">
+        <header className="w-full rounded-full border border-white/60 bg-white/40 py-2 pl-4 pr-2 shadow-lg shadow-stone-900/5 backdrop-blur-xl sm:pl-5">
           <div className="flex h-12 items-center justify-between gap-2">
             <a href="#top" className="flex min-w-0 items-center gap-2" onClick={() => setOpen(false)}>
               <img src="/icon-192.png" alt="Malika" className="h-8 w-8 shrink-0 rounded-full object-contain" />
