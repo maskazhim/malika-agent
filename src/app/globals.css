@@ -8,7 +8,7 @@
   --malika-teal: #14b8a6;
   --malika-cyan: #22d3ee;
   --malika-blue: #3b82f6;
-  --malika-gradient: linear-gradient(135deg, #bef264 0%, #4ade80 30%, #14b8a6 62%, #3b82f6 100%);
+  --malika-gradient: linear-gradient(135deg, #77ffcd 0%, #6c99fe 100%);
 }
 
 @theme inline {
@@ -52,7 +52,7 @@ body {
   height: 44vw;
   left: -10vw;
   top: -12vw;
-  background: radial-gradient(circle, rgba(190, 242, 100, 0.28), transparent 70%);
+  background: radial-gradient(circle, rgba(119, 255, 205, 0.28), transparent 70%);
   animation: drift-1 22s ease-in-out infinite alternate;
 }
 
@@ -61,7 +61,7 @@ body {
   height: 40vw;
   right: -12vw;
   top: 22vh;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.18), transparent 70%);
+  background: radial-gradient(circle, rgba(108, 153, 254, 0.18), transparent 70%);
   animation: drift-2 26s ease-in-out infinite alternate;
 }
 
@@ -70,7 +70,7 @@ body {
   height: 46vw;
   left: 20vw;
   bottom: -18vw;
-  background: radial-gradient(circle, rgba(20, 184, 166, 0.16), transparent 70%);
+  background: radial-gradient(circle, rgba(119, 255, 205, 0.16), transparent 70%);
   animation: drift-3 30s ease-in-out infinite alternate;
 }
 
