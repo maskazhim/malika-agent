@@ -7,16 +7,15 @@ export default function InteractiveDemo() {
     <section id="demo" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-12 sm:px-6">
       <div className="text-center">
         <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">
-          Interactive Demo · replika tampilan Malika Agent
+          Preview dashboard · bukan AI beneran, cuma simulasi
         </p>
         <h2 className="mx-auto mt-2 max-w-2xl text-3xl font-semibold tracking-tight sm:text-4xl">
-          3 bot template. <span className="malika-gradient-text">Klik &amp; ketik bebas.</span>
+          Intip dulu tampilannya.
         </h2>
         <p className="mx-auto mt-3 max-w-2xl text-sm text-stone-600 sm:text-base">
-          <strong>Kazhim</strong> (Project Manager) kumpulin data growth + analisis,{" "}
-          <strong>Gilang</strong> (Marketing Expert) cek performa Instagram,{" "}
-          <strong>Rahma</strong> (Support Specialist) list klien expired + tawarkan reminder.
-          Ganti agent, kirim pesan, atau intip layarnya saat running.
+          Biar kebayang gimana rasanya kasih tugas ke agent dan lihat dia kerja, kita bikin
+          simulasi dengan skenario siap pakai. Klik saran di bawah chat atau ketik sendiri,
+          lalu buka tab Running buat lihat layar komputernya.
         </p>
       </div>
 
