@@ -498,27 +498,63 @@ export const PRICING = [
 
 export const FAQS = [
   {
-    q: "Apa bedanya Malika Agent dengan ChatGPT / Claude biasa?",
-    a: "ChatGPT berhenti saat laptop kamu ditutup. Malika Agent punya komputer sendiri di server yang jalan 24/7, bisa dijadwalkan lewat rutinitas, dan bisa login langsung ke tools seperti JobStreet atau Jurnal.id untuk mengerjakan tugas sampai selesai.",
+    q: "Agent ini sebenarnya bisa kerja apa saja? Ada batasannya?",
+    a: "Selama pekerjaannya bisa dilakukan manusia lewat browser (buka web, login, klik, isi form, baca data, buat laporan), agent bisa mengerjakannya. Yang belum bisa: tugas yang butuh verifikasi fisik, CAPTCHA berat, aplikasi desktop yang tidak berbasis web, dll.",
   },
   {
-    q: "Apakah data login saya (JobStreet, Instagram, dll.) aman?",
-    a: "Kredensial disimpan terenkripsi dan sesi browser terisolasi per agent. Setiap aksi agent tercatat di audit log, dan aksi sensitif (kirim pesan, posting publik) membutuhkan approval kamu terlebih dulu.",
+    q: "Bagaimana cara memberi tugas? Apakah harus pakai perintah khusus?",
+    a: "Cukup tulis seperti chat ke karyawan: \u201cTolong screening CV yang masuk hari ini\u201d. Tidak perlu format khusus atau kode. Jika pekerjaan kompleks, bisa berikan SOP / buat skill, lalu AI akan mengerjakannya dengan cepat.",
   },
   {
-    q: "Bagaimana cara bayar? Apakah bisa QRIS?",
-    a: "Bisa. Saat checkout kamu dapat QRIS dinamis dengan total = harga paket + kode unik Rp1–Rp999. Kode unik membuat pembayaranmu terdeteksi otomatis — bayar sesuai total persis, jangan diubah. Sistem kami memverifikasi pembayaran otomatis — akun aktif segera setelah pembayaran terdeteksi.",
+    q: "Berapa lama setup awal sampai agent bisa mulai kerja?",
+    a: "Setup akun Malika Agent memakan waktu 1-3 hari kerja termasuk onboarding. Setiap klien mendapatkan server masing-masing, sehingga data tidak tercampur dengan data klien lain.",
   },
   {
-    q: "Apa itu skill? Apakah saya harus bisa prompt engineering?",
-    a: "Tidak perlu. Skill adalah paket instruksi + tools siap pakai (mis. 'Ahli Rekrutmen JobStreet'). Sekali klik install, agent langsung tahu cara kerja di domain itu.",
+    q: "Bagaimana cara menambah agent baru?",
+    a: "Semudah klik tombol buat agent baru. Beri nama dan peran, lalu beri tugas. Tidak perlu setup teknis.",
   },
   {
-    q: "Bisa pakai langganan ChatGPT / Claude / Grok yang sudah saya punya?",
-    a: "Bisa lewat fitur Bring Your Own Subscription. Kamu sambungkan akun yang sudah ada agar tidak bayar dobel untuk akses model — detail mekanisme final akan dijelaskan saat onboarding.",
+    q: "Bagaimana kalau agent salah mengerjakan sesuatu?",
+    a: "Aksi sensitif (kirim pesan, posting, transaksi) bisa diatur untuk meminta approval kamu dulu. Semua aktivitas tercatat, jadi kamu bisa cek dan koreksi.",
   },
   {
-    q: "Apakah agent bisa kena blokir oleh Instagram / LinkedIn / JobStreet?",
-    a: "Platform tersebut punya aturan anti-otomasi. Kami memitigasi dengan kecepatan aksi yang wajar, pemakaian API resmi bila tersedia, dan mode approval manusia untuk aksi sensitif. Risiko ini kami jelaskan transparan sebelum aktivasi integrasi.",
+    q: "Bisa dipantau saat agent bekerja?",
+    a: "Bisa. Kamu bisa buka live activity feed dan intip layar komputer agent kapan saja.",
+  },
+  {
+    q: "Data bisnis saya disimpan di mana? Dipakai untuk melatih AI?",
+    a: "Data bisnis disimpan di server yang berada di Indonesia. Masing-masing klien mendapatkan server sendiri, sehingga data tidak tercampur. Data tidak digunakan untuk melatih AI jika menggunakan model pilihan Malika. Jika menggunakan langganan sendiri (GPT, Claude, Grok), berlaku ketentuan masing-masing. Jika memakai model gratis, data bisa saja dipakai untuk melatih AI.",
+  },
+  {
+    q: "Kalau agent butuh kode OTP / verifikasi 2 langkah, bagaimana?",
+    a: "Kamu bisa takeover / mengendalikan komputer AI Agent untuk menyelesaikan verifikasi — baik CAPTCHA, OTP, atau 2FA. Setelahnya, serahkan lagi akses komputer ke agent.",
+  },
+  {
+    q: "Apa yang dimaksud \u201ckomputer aktif\u201d dan \u201ckuota\u201d?",
+    a: "Setiap paket punya spesifikasi server tersendiri. Komputer aktif adalah batas komputer yang bisa dipakai bersamaan — lebih dari itu server bisa crash atau error. Malika membatasi via sistem agar kamu tidak membuat komputer melebihi langganan. Satu komputer bisa dipakai beberapa agent secara bergantian.",
+  },
+  {
+    q: "Apa yang terjadi kalau kuota habis?",
+    a: "Agent akan berhenti bekerja jika kuota habis. Akan ada keterangan jika kuota sudah habis.",
+  },
+  {
+    q: "Apakah ada kontrak? Bisa berhenti kapan saja? Ada trial atau garansi?",
+    a: "Langganan Malika bisa bulanan, 6 bulan, dan 1 tahun sekaligus.",
+  },
+  {
+    q: "Apakah ada biaya di luar paket (biaya model AI, setup)?",
+    a: "Biaya di luar paket adalah: kelebihan kredit AI yang dibutuhkan, custom integrasi jika diperlukan, jasa setup AI Agent jika diperlukan, dan langganan MCP Composio jika digunakan.",
+  },
+  {
+    q: "Apa itu Composio MCP?",
+    a: "Ini penghubung yang memungkinkan agent terkoneksi ke ratusan aplikasi (Gmail, Google Sheets, Slack, dll.) selain lewat browser.",
+  },
+  {
+    q: "Bisa dipakai untuk aplikasi/website internal saya?",
+    a: "Bisa. Malika Agent punya komputer dan browsernya sendiri, jadi bisa melakukan aktivitas apa pun yang memerlukan komputer dan browser — termasuk website atau aplikasi internal kamu.",
+  },
+  {
+    q: "Apakah bisa terhubung ke WhatsApp atau CRM saya?",
+    a: "Bisa, Malika bisa dihubungkan ke aplikasi eksternal melalui API atau MCP.",
   },
 ];
