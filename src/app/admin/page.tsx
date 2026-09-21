@@ -45,10 +45,12 @@ const STATUS_LABEL: Record<string, string> = {
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
+  const [view, setView] = useState<"orders" | "pricing">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(
@@ -117,6 +119,24 @@ export default function AdminPage() {
     router.replace("/login");
   }
 
+  async function removeOrder(order_id: string) {
+    if (!window.confirm("Hapus order ini permanen? Kode uniknya ikut dibebaskan.")) return;
+    setDeleting(order_id);
+    try {
+      const res = await fetch(`/api/orders?order_id=${encodeURIComponent(order_id)}`, { method: "DELETE" });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (!res.ok) throw new Error("gagal");
+      setOrders((os) => os.filter((o) => o.order_id !== order_id));
+    } catch {
+      setError("Gagal menghapus order.");
+    } finally {
+      setDeleting(null);
+    }
+  }
+
   if (auth === "checking") {
     return <main className="mx-auto max-w-6xl px-4 py-20 text-center text-sm text-stone-500">Memeriksa sesi…</main>;
   }
@@ -136,6 +156,24 @@ export default function AdminPage() {
         </button>
       </div>
 
+      <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
+        {(["orders", "pricing"] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`rounded-xl px-4 py-2 transition ${
+              view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
+            }`}
+          >
+            {v === "orders" ? "Order" : "Harga Paket"}
+          </button>
+        ))}
+      </div>
+
+      {view === "pricing" ? (
+        <PricingManager />
+      ) : (
+        <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
         {FILTERS.map((f) => (
           <button
@@ -227,6 +265,13 @@ export default function AdminPage() {
                           Batal
                         </button>
                       )}
+                      <button
+                        onClick={() => removeOrder(o.order_id)}
+                        disabled={deleting === o.order_id}
+                        className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                      >
+                        {deleting === o.order_id ? "…" : "Hapus"}
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -235,6 +280,142 @@ export default function AdminPage() {
           </table>
         )}
       </div>
+        </>
+      )}
     </main>
+  );
+}
+
+interface PlanRow {
+  key: string;
+  name: string;
+  price: number;
+  period: string;
+  description: string;
+  features: string[];
+  cta: string;
+  popular: boolean;
+}
+
+function PricingManager() {
+  const [plans, setPlans] = useState<PlanRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/pricing")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { plans?: PlanRow[] } | null) => setPlans(data?.plans ?? []))
+      .catch(() => setMsg("Gagal memuat harga paket."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  function edit(key: string, patch: Partial<PlanRow>) {
+    setPlans((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  }
+
+  async function save(p: PlanRow) {
+    const price = Math.round(Number(p.price));
+    if (!price || price <= 0) {
+      setMsg(`Harga ${p.name} harus angka > 0.`);
+      return;
+    }
+    setSaving(p.key);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/pricing", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: p.key,
+          price,
+          description: p.description,
+          features: p.features,
+          cta: p.cta,
+          popular: p.popular,
+        }),
+      });
+      if (!res.ok) throw new Error("gagal");
+      setMsg(`${p.name} tersimpan — halaman #harga ikut update otomatis.`);
+    } catch {
+      setMsg(`Gagal menyimpan ${p.name}.`);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  if (loading) return <p className="p-8 text-center text-sm text-stone-500">Memuat harga paket…</p>;
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      {plans.map((p) => (
+        <div key={p.key} className="glass-strong rounded-3xl p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-bold">
+              {p.name} <span className="text-xs font-normal text-stone-400">({p.key})</span>
+            </h2>
+            <label className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+              <input
+                type="checkbox"
+                checked={p.popular}
+                onChange={(e) => edit(p.key, { popular: e.target.checked })}
+                className="h-4 w-4 accent-teal-600"
+              />
+              Paling Populer
+            </label>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Harga (Rp, angka saja)</span>
+              <input
+                type="number"
+                min={1}
+                value={p.price}
+                onChange={(e) => edit(p.key, { price: Number(e.target.value) })}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Tombol CTA</span>
+              <input
+                value={p.cta}
+                onChange={(e) => edit(p.key, { cta: e.target.value })}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Deskripsi</span>
+              <input
+                value={p.description}
+                onChange={(e) => edit(p.key, { description: e.target.value })}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Fitur (satu per baris)</span>
+              <textarea
+                rows={Math.min(12, Math.max(4, p.features.length + 1))}
+                value={p.features.join("\n")}
+                onChange={(e) =>
+                  edit(p.key, { features: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })
+                }
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+          </div>
+          <button
+            onClick={() => save(p)}
+            disabled={saving === p.key}
+            className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+          >
+            {saving === p.key ? "Menyimpan…" : `Simpan ${p.name}`}
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }

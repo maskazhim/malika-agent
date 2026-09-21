@@ -8,9 +8,10 @@
      # Env: ADMIN_PASSCODE_HASH + SESSION_SECRET (untuk endpoint admin)
 
    Akses:
-     POST   publik   — simpan/upsert order (checkout & konfirmasi bayar)
-     GET    ?order_id=xxx publik (cek satu order); tanpa param = daftar (khusus admin)
-     PATCH  khusus admin — update status order
+      POST   publik   — simpan/upsert order (checkout & konfirmasi bayar)
+      GET    ?order_id=xxx publik (cek satu order); tanpa param = daftar (khusus admin)
+      PATCH  khusus admin — update status order
+      DELETE khusus admin — hapus order permanen
 */
 
 /* Minimal D1 types (agar lolos type-check Next tanpa @cloudflare/workers-types) */
@@ -193,4 +194,24 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
     return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
   }
   return Response.json({ ok: true, order_id, status }, { headers: cors });
+}
+
+// DELETE /api/orders?order_id=xxx — khusus admin (hapus order permanen).
+// Baris yang dihapus otomatis membebaskan kode uniknya.
+export async function onRequestDelete({ request, env }: { request: Request; env: Env }) {
+  if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
+  if (!(await isAdmin(request, env))) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  }
+  const order_id = (new URL(request.url).searchParams.get("order_id") ?? "").slice(0, 64);
+  if (!order_id) {
+    return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
+  }
+  const res = (await env.DB.prepare("DELETE FROM orders WHERE order_id = ?")
+    .bind(order_id)
+    .run()) as { meta?: { changes?: number } };
+  if (!res?.meta?.changes) {
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+  }
+  return Response.json({ ok: true, order_id }, { headers: cors });
 }

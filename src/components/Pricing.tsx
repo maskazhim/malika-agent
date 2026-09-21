@@ -1,16 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PRICING } from "@/data/demo";
 import { formatRp } from "@/lib/qris";
 import { newOrderId, saveOrder } from "@/lib/orders";
 
-const AMOUNTS: Record<string, number> = {
+const FALLBACK_AMOUNTS: Record<string, number> = {
   Starter: 1799000,
   Growth: 4599000,
   Scale: 10999000,
 };
+
+interface Plan {
+  key: string;
+  name: string;
+  priceInt: number;
+  period: string;
+  desc: string;
+  features: string[];
+  cta: string;
+  popular: boolean;
+}
+
+function fallbackPlans(): Plan[] {
+  return PRICING.map((p) => ({
+    key: p.name.toLowerCase(),
+    name: p.name,
+    priceInt: FALLBACK_AMOUNTS[p.name] ?? 0,
+    period: p.period,
+    desc: p.desc,
+    features: p.features,
+    cta: p.cta,
+    popular: p.popular,
+  }));
+}
 
 interface FormState {
   nama: string;
@@ -21,9 +45,45 @@ interface FormState {
 
 export default function Pricing() {
   const router = useRouter();
+  const [plans, setPlans] = useState<Plan[]>(fallbackPlans);
   const [open, setOpen] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({ nama: "", bisnis: "", telepon: "", email: "" });
   const [error, setError] = useState<string | null>(null);
+
+  // Harga live dari /api/pricing (bisa diubah via dashboard admin).
+  // Gagal fetch → tetap pakai data statis di atas.
+  useEffect(() => {
+    interface ApiPlan {
+      key: string;
+      name: string;
+      price: number;
+      period: string;
+      description: string;
+      features: string[];
+      cta: string;
+      popular: boolean;
+    }
+    fetch("/api/pricing")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { plans?: ApiPlan[] } | null) => {
+        if (!data?.plans || data.plans.length === 0) return;
+        setPlans(
+          data.plans.map((p) => ({
+            key: String(p.key),
+            name: String(p.name),
+            priceInt: Math.round(Number(p.price ?? 0)) || 0,
+            period: String(p.period ?? "/bulan"),
+            desc: String(p.description ?? ""),
+            features: Array.isArray(p.features) ? p.features.map(String) : [],
+            cta: String(p.cta ?? ""),
+            popular: Boolean(p.popular),
+          }))
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  const active = plans.find((p) => p.key === open) ?? null;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,20 +105,23 @@ export default function Pricing() {
       setError("Email tidak valid.");
       return;
     }
+    if (!active || !active.priceInt) {
+      setError("Paket tidak valid.");
+      return;
+    }
     setError(null);
-    const product = open ?? "";
     const order_id = newOrderId();
     const q = new URLSearchParams({
-      product,
-      amount: String(AMOUNTS[product] ?? 0),
+      product: active.name,
+      amount: String(active.priceInt),
       order_id,
       ...f,
     });
     // Simpan order tahap checkout ke D1 (fallback localStorage bila API belum siap).
     void saveOrder({
       order_id,
-      product,
-      amount: AMOUNTS[product] ?? 0,
+      product: active.name,
+      amount: active.priceInt,
       ...f,
       status: "checkout",
     });
@@ -77,9 +140,9 @@ export default function Pricing() {
         halaman pembayaran.
       </p>
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
-        {PRICING.map((p) => (
+        {plans.map((p) => (
           <div
-            key={p.name}
+            key={p.key}
             className={`glass relative flex flex-col rounded-3xl p-7 transition hover:-translate-y-1 ${
               p.popular ? "ring-2 ring-teal-400" : ""
             }`}
@@ -91,7 +154,7 @@ export default function Pricing() {
             )}
             <p className="text-sm font-semibold text-teal-700">{p.name}</p>
             <p className="mt-2 text-3xl font-bold tracking-tight">
-              {p.price}
+              {formatRp(p.priceInt)}
               <span className="text-sm font-normal text-stone-500">{p.period}</span>
             </p>
             <p className="mt-2 text-sm text-stone-600">{p.desc}</p>
@@ -105,7 +168,7 @@ export default function Pricing() {
             </ul>
             <button
               onClick={() => {
-                setOpen(p.name);
+                setOpen(p.key);
                 setError(null);
               }}
               className={`mt-6 rounded-full px-5 py-2.5 text-center text-sm font-semibold transition hover:opacity-90 ${
@@ -118,7 +181,7 @@ export default function Pricing() {
         ))}
       </div>
 
-      {open && (
+      {active && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => setOpen(null)}>
           <div
             className="glass-strong feed-in w-full max-w-md rounded-3xl p-7"
@@ -128,8 +191,8 @@ export default function Pricing() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Checkout</p>
                 <h3 className="mt-1 text-xl font-bold">
-                  {open} · {formatRp(AMOUNTS[open] ?? 0)}
-                  <span className="text-sm font-normal text-stone-500">/bulan</span>
+                  {active.name} · {formatRp(active.priceInt)}
+                  <span className="text-sm font-normal text-stone-500">{active.period}</span>
                 </h3>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
@@ -137,7 +200,7 @@ export default function Pricing() {
             <form onSubmit={submit} className="mt-5 space-y-3">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-stone-500">Produk dipilih</span>
-                <input value={open} disabled className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-500 outline-none" />
+                <input value={active.name} disabled className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-500 outline-none" />
               </label>
               {(
                 [
