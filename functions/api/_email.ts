@@ -10,7 +10,8 @@ export interface EnvWithMail {
   RESEND_FROM?: string;
 }
 
-export const DEFAULT_FROM = "Malika Agent <halo@malika.ai>";
+export const DEFAULT_FROM = "Malika Agent <noreply@malikaagent.my.id>";
+export const REPLY_TO = "halo@malika.ai";
 
 export function fmtRp(n: number): string {
   return "Rp" + Number(n).toLocaleString("id-ID");
@@ -33,6 +34,7 @@ export async function sendMail(
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: env.RESEND_FROM || DEFAULT_FROM,
+        reply_to: REPLY_TO,
         to: msg.to,
         subject: msg.subject,
         html: msg.html,

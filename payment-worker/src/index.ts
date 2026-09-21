@@ -83,7 +83,7 @@ interface ActiveOrder {
   unique_code: number | null;
 }
 
-const DEFAULT_FROM = "Malika Agent <halo@malika.ai>";
+const DEFAULT_FROM = "Malika Agent <noreply@malikaagent.my.id>";
 
 function fmtRp(n: number): string {
   return "Rp" + Number(n).toLocaleString("id-ID");
@@ -106,6 +106,7 @@ async function sendPaymentConfirmedMail(
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         from: env.RESEND_FROM || DEFAULT_FROM,
+        reply_to: "halo@malika.ai",
         to: o.email,
         subject: `Pembayaran ${o.product} dikonfirmasi ✓`,
         html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1d1d1f"><div style="background:linear-gradient(135deg,#77ffcd,#6c99fe);padding:20px 24px;border-radius:16px 16px 0 0"><div style="font-size:18px;font-weight:bold;color:#0c1a2b">Malika Agent</div></div><div style="background:#ffffff;border:1px solid #eee;border-top:0;padding:24px;border-radius:0 0 16px 16px"><p>Halo ${o.nama},</p><p>Pembayaranmu sudah kami terima dan <strong>terkonfirmasi</strong>:</p><ul><li>Produk: <strong>${o.product}/bulan</strong></li><li>Total: <strong>${fmtRp(o.amount)}</strong></li><li>Order: <code>${o.order_id}</code></li></ul><p>Setup server Malika Agent kamu memakan waktu <strong>1-3 hari kerja</strong> termasuk onboarding. Detail akses (URL, email, password) akan kami kirim via email terpisah setelah server siap.</p><p>Terima kasih sudah percaya Malika Agent!</p></div><p style="font-size:12px;color:#888;text-align:center">WhatsApp: +628221114681 · halo@malika.ai</p></div>`,
