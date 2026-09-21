@@ -31,7 +31,7 @@ export default function Footer() {
       <div className="border-t border-white/10">
         <div className="mx-auto flex max-w-6xl flex-col justify-between gap-2 px-4 py-5 text-xs text-stone-500 sm:flex-row sm:px-6">
           <span>© 2026 Malika AI.</span>
-          <span>Syarat &amp; Ketentuan · Kebijakan Privasi (UU PDP)</span>
+          <span>Syarat &amp; Ketentuan · Kebijakan Privasi</span>
         </div>
       </div>
     </footer>

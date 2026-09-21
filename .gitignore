@@ -42,3 +42,7 @@ next-env.d.ts
 
 # cloudflare worker experiment (bukan bagian web)
 agent-ai/
+
+# payment worker: source ikut repo, deps & build lokal jangan
+payment-worker/node_modules
+payment-worker/.wrangler

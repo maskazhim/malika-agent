@@ -1,0 +1,16 @@
+{
+  "name": "malika-payment-watcher",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.2",
+    "wrangler": "^4"
+  }
+}
