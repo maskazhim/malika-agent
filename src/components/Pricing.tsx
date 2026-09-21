@@ -194,7 +194,13 @@ export default function Pricing() {
                   {active.name} · {formatRp(active.priceInt)}
                   <span className="text-sm font-normal text-stone-500">{active.period}</span>
                 </h3>
-              </div>
+      </div>
+
+      <p className="mx-auto mt-8 max-w-3xl text-center text-xs leading-relaxed text-stone-500">
+        Biaya penggunaan token AI menyesuaikan beban pekerjaan yang diberikan. Biaya Malika adalah biaya layanan
+        dan kredit AI. Anda bisa top up kredit AI Malika atau hubungkan ke langganan ChatGPT, Grok, atau Claude
+        yang Anda miliki untuk tambahan kredit AI.
+      </p>
               <button onClick={() => setOpen(null)} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
             </div>
             <form onSubmit={submit} className="mt-5 space-y-3">

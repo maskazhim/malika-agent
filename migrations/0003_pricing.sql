@@ -13,13 +13,13 @@ CREATE TABLE IF NOT EXISTS pricing (
 );
 
 INSERT INTO pricing (key, name, price, period, description, features, cta, popular) VALUES
-('starter', 'Starter', 1799000, '/bulan', 'Untuk 1 cabang yang mau delegasikan 1-2 kerjaan repetitif.',
+('starter', 'Starter', 1799000, '/bulan', 'Setara 2 karyawan manusia bekerja 24/7 nonstop.',
  '["1 user","2 komputer AI aktif 24 jam","Koneksi internet 2 komputer AI 30 hari","Jalankan berbagai pekerjaan rutin secara otomatis","Akses model AI pilihan Malika","Pilih model AI Anda sendiri (Grok, GPT, Claude)","Integrasi MCP","Support Standard"]',
  'Pilih Starter', 0),
-('growth', 'Growth', 4599000, '/bulan', 'Untuk bisnis bertumbuh dengan beberapa tim operasional.',
+('growth', 'Growth', 4599000, '/bulan', 'Setara 6 karyawan manusia bekerja 24/7 nonstop.',
  '["Kuota penggunaan AI 3× lebih besar dari Starter","3 user","6 komputer AI aktif 24 jam","Koneksi internet 6 komputer AI 30 hari","Jalankan berbagai pekerjaan rutin secara otomatis","Akses model AI pilihan Malika","Pilih model AI Anda sendiri (Grok, GPT, Claude)","Integrasi MCP","Support Prioritas"]',
  'Pilih Growth', 1),
-('scale', 'Scale', 10999000, '/bulan', 'Untuk multi-cabang & volume kerja operasional tinggi.',
+('scale', 'Scale', 10999000, '/bulan', 'Setara 12 karyawan manusia bekerja 24/7 nonstop.',
  '["Kuota penggunaan AI 9× lebih besar dari Starter","6 user","12 komputer AI aktif 24 jam","Koneksi internet 12 komputer AI 30 hari","Jalankan berbagai pekerjaan rutin secara otomatis","Gunakan model AI pilihan Malika","Pilih model AI Anda sendiri (Grok, GPT, Claude)","Integrasi MCP","Integrasi khusus sesuai dengan kebutuhan bisnis Anda","Pendamping khusus untuk bisnis Anda"]',
  'Hubungi Kami', 0)
 ON CONFLICT(key) DO NOTHING;

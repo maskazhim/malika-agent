@@ -441,7 +441,7 @@ export const PRICING = [
     name: "Starter",
     price: "Rp1.799.000",
     period: "/bulan",
-    desc: "Untuk 1 cabang yang mau delegasikan 1-2 kerjaan repetitif.",
+    desc: "Setara 2 karyawan manusia bekerja 24/7 nonstop.",
     features: [
       "1 user",
       "2 komputer AI aktif 24 jam",
@@ -459,7 +459,7 @@ export const PRICING = [
     name: "Growth",
     price: "Rp4.599.000",
     period: "/bulan",
-    desc: "Untuk bisnis bertumbuh dengan beberapa tim operasional.",
+    desc: "Setara 6 karyawan manusia bekerja 24/7 nonstop.",
     features: [
       "Kuota penggunaan AI 3× lebih besar dari Starter",
       "3 user",
@@ -478,7 +478,7 @@ export const PRICING = [
     name: "Scale",
     price: "Rp10.999.000",
     period: "/bulan",
-    desc: "Untuk multi-cabang & volume kerja operasional tinggi.",
+    desc: "Setara 12 karyawan manusia bekerja 24/7 nonstop.",
     features: [
       "Kuota penggunaan AI 9× lebih besar dari Starter",
       "6 user",
