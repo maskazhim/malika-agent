@@ -1,15 +1,27 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import QRCode from "react-qr-code";
 import { useRouter, useSearchParams } from "next/navigation";
-import { formatRp } from "@/lib/qris";
-import { newOrderId, saveOrder, type OrderMethod } from "@/lib/orders";
+import { buildDynamicQris, formatRp, getStaticPayload, parseQris } from "@/lib/qris";
+import {
+  allocateCode,
+  buildTransferWaLink,
+  newOrderId,
+  saveOrder,
+  type AllocatedCode,
+  type OrderMethod,
+} from "@/lib/orders";
 
 const BANKS = [
   { bank: "BCA", norek: "169-3331777", an: "PT TEKNOLOGI CENDEKIA NUSANTARA" },
   { bank: "MANDIRI", norek: "1370001310008", an: "PT TEKNOLOGI CENDEKIA NUSANTARA" },
 ];
+
+function merchantName(payload: string): string {
+  return parseQris(payload).find((f) => f.id === "59")?.value.trim() || "Merchant QRIS";
+}
 
 function PaymentInner() {
   const q = useSearchParams();
@@ -28,14 +40,45 @@ function PaymentInner() {
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // QRIS dinamis + kode unik
+  const [alloc, setAlloc] = useState<AllocatedCode | null>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [allocLoading, setAllocLoading] = useState(false);
+  const [allocError, setAllocError] = useState<string | null>(null);
+  const allocFor = useRef<string>("");
+
   useEffect(() => {
     if (left <= 0) return;
     const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
   }, [left]);
 
+  // Alokasi kode unik sekali per order saat tab QRIS dibuka.
+  useEffect(() => {
+    if (method !== "qris" || !orderId || allocFor.current === orderId) return;
+    allocFor.current = orderId;
+    setAllocLoading(true);
+    setAllocError(null);
+    allocateCode(orderId)
+      .then((a) => {
+        if (!a) {
+          setAllocError("Gagal menyiapkan kode unik. Cek koneksi lalu muat ulang halaman.");
+          return;
+        }
+        setAlloc(a);
+        const { payload } = getStaticPayload();
+        const dyn = buildDynamicQris(payload, a.amount);
+        if (!dyn) setAllocError("QRIS merchant tidak valid. Hubungi tim Malika.");
+        else setQr(dyn);
+      })
+      .catch(() => setAllocError("Gagal menyiapkan kode unik. Cek koneksi lalu muat ulang halaman."))
+      .finally(() => setAllocLoading(false));
+  }, [method, orderId]);
+
   const mm = String(Math.floor(left / 60)).padStart(2, "0");
   const ss = String(left % 60).padStart(2, "0");
+
+  const total = method === "qris" && alloc ? alloc.amount : amount;
 
   function copy(text: string, key: string) {
     navigator.clipboard?.writeText(text).catch(() => {});
@@ -48,14 +91,46 @@ function PaymentInner() {
       setError("Nominal tidak valid.");
       return;
     }
+    if (method === "transfer") {
+      // Konfirmasi transfer langsung ke WhatsApp admin.
+      setSending(true);
+      setError(null);
+      const oid = orderId || newOrderId();
+      await saveOrder({
+        order_id: oid,
+        product,
+        amount,
+        nama,
+        bisnis,
+        telepon,
+        email,
+        method,
+        bukti_filename: "",
+        status: "payment_proof",
+      });
+      window.open(buildTransferWaLink({ order_id: oid, product, amount, nama }), "_blank");
+      const params = new URLSearchParams({
+        method,
+        product,
+        amount: String(amount),
+        nama,
+        order_id: oid,
+      });
+      router.push(`/payment/success?${params.toString()}`);
+      return;
+    }
+    // QRIS: wajib ada kode unik agar bisa diverifikasi otomatis.
+    if (!alloc) {
+      setError("Kode unik belum siap. Muat ulang halaman dulu ya.");
+      return;
+    }
     setSending(true);
     setError(null);
     const oid = orderId || newOrderId();
-    // Upload bukti transfer menyusul setelah R2 aktif; saat ini order + metode dicatat ke D1.
     await saveOrder({
       order_id: oid,
       product,
-      amount,
+      amount: alloc.amount,
       nama,
       bisnis,
       telepon,
@@ -63,16 +138,22 @@ function PaymentInner() {
       method,
       bukti_filename: "",
       status: "payment_proof",
+      unique_code: alloc.unique_code,
+      code_expires_at: alloc.expires_at,
     });
     const params = new URLSearchParams({
       method,
       product,
-      amount: String(amount),
+      amount: String(alloc.amount),
+      base: String(alloc.base),
+      unique_code: String(alloc.unique_code),
       nama,
       order_id: oid,
     });
     router.push(`/payment/success?${params.toString()}`);
   }
+
+  const { payload: staticPayload, isDemo } = getStaticPayload();
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
@@ -83,7 +164,7 @@ function PaymentInner() {
         Pembayaran <span className="malika-gradient-text">{method === "qris" ? "QRIS" : "Transfer Bank"}</span>
       </h1>
       <p className="mt-1 text-sm text-stone-600">
-        {product}/bulan · <span className="font-semibold text-stone-900">{formatRp(amount)}</span> · a.n. {nama}
+        {product}/bulan · <span className="font-semibold text-stone-900">{formatRp(total)}</span> · a.n. {nama}
       </p>
 
       {/* Pilihan metode */}
@@ -105,28 +186,63 @@ function PaymentInner() {
         <div className="glass-strong rounded-3xl p-6 text-center">
           {method === "qris" ? (
             <>
-              <div className="mx-auto w-fit rounded-2xl bg-white p-3 ring-1 ring-stone-200">
-                <img
-                  src="/qris.jpg"
-                  alt="QRIS Malika Agent"
-                  className="h-auto w-56 rounded-lg object-contain"
-                  loading="eager"
-                />
-              </div>
-              <p className="malika-gradient-text mt-3 text-2xl font-bold">{formatRp(amount)}</p>
-              <p className="text-xs text-stone-500">{product}/bulan</p>
-              <p
-                className={`mt-2 inline-block rounded-full px-3 py-1 text-xs font-semibold ${
-                  left < 300 ? "bg-red-100 text-red-700" : "bg-white/70 text-stone-600 ring-1 ring-white"
-                }`}
-              >
-                Berlaku {mm}:{ss}
-              </p>
-              <ol className="mx-auto mt-3 max-w-xs space-y-1 text-left text-xs leading-relaxed text-stone-500">
-                <li>1. Buka e-wallet / m-banking apa pun.</li>
-                <li>2. Scan QR — pastikan nominal {formatRp(amount)}.</li>
-                <li>3. Bayar, lalu klik “Saya sudah bayar”.</li>
-              </ol>
+              {allocLoading || (!qr && !allocError) ? (
+                <div className="mx-auto flex w-fit flex-col items-center rounded-2xl bg-white p-8 ring-1 ring-stone-200">
+                  <p className="text-sm text-stone-500">Menyiapkan QR + kode unik…</p>
+                </div>
+              ) : allocError || !qr || !alloc ? (
+                <div className="mx-auto w-fit max-w-xs rounded-2xl bg-red-50 p-5 text-sm text-red-600 ring-1 ring-red-100">
+                  {allocError ?? "QR belum siap."}
+                  <button
+                    onClick={() => {
+                      allocFor.current = "";
+                      setAlloc(null);
+                      setQr(null);
+                    }}
+                    className="mt-3 w-full rounded-full bg-stone-900 py-2 text-xs font-semibold text-white"
+                  >
+                    Coba lagi
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="mx-auto w-fit rounded-2xl bg-white p-3 ring-1 ring-stone-200">
+                    <QRCode value={qr} size={224} />
+                  </div>
+                  <p className="mt-2 text-xs text-stone-500">{merchantName(staticPayload)}</p>
+                  {isDemo && (
+                    <p className="mt-1 inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                      Mode testing — QR valid format, jangan bayar asli
+                    </p>
+                  )}
+                  <dl className="mx-auto mt-3 max-w-xs space-y-1 text-sm">
+                    <div className="flex justify-between text-stone-500">
+                      <dt>Harga paket</dt>
+                      <dd>{formatRp(alloc.base)}</dd>
+                    </div>
+                    <div className="flex justify-between text-stone-500">
+                      <dt>Kode unik</dt>
+                      <dd className="font-semibold text-teal-700">+{alloc.unique_code}</dd>
+                    </div>
+                    <div className="flex justify-between border-t border-stone-200 pt-1 text-base font-bold">
+                      <dt>Total bayar</dt>
+                      <dd className="malika-gradient-text">{formatRp(alloc.amount)}</dd>
+                    </div>
+                  </dl>
+                  <p
+                    className={`mt-2 inline-block rounded-full px-3 py-1 text-xs font-semibold ${
+                      left < 300 ? "bg-red-100 text-red-700" : "bg-white/70 text-stone-600 ring-1 ring-white"
+                    }`}
+                  >
+                    Berlaku {mm}:{ss}
+                  </p>
+                  <ol className="mx-auto mt-3 max-w-xs space-y-1 text-left text-xs leading-relaxed text-stone-500">
+                    <li>1. Buka e-wallet / m-banking apa pun.</li>
+                    <li>2. Scan QR — nominal {formatRp(alloc.amount)} sudah terisi otomatis, jangan diubah.</li>
+                    <li>3. Bayar, lalu klik “Saya sudah bayar”.</li>
+                  </ol>
+                </>
+              )}
             </>
           ) : (
             <div className="text-left">
@@ -150,7 +266,8 @@ function PaymentInner() {
               </div>
               <p className="mt-3 text-xs leading-relaxed text-stone-500">
                 Transfer tepat <span className="font-semibold text-stone-800">{formatRp(amount)}</span> ke salah satu
-                rekening di atas, lalu klik “Konfirmasi Transfer”.
+                rekening di atas, lalu klik tombol di bawah — kamu akan diarahkan ke WhatsApp admin. Silakan kirimkan
+                bukti transfer untuk diverifikasi.
               </p>
             </div>
           )}
@@ -162,10 +279,10 @@ function PaymentInner() {
           )}
           <button
             onClick={confirm}
-            disabled={sending}
+            disabled={sending || (method === "qris" && !alloc)}
             className="malika-gradient mt-4 w-full rounded-full px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
           >
-            {sending ? "Mengirim…" : method === "qris" ? "Saya sudah bayar" : "Konfirmasi Transfer"}
+            {sending ? "Mengirim…" : method === "qris" ? "Saya sudah bayar" : "Konfirmasi via WhatsApp"}
           </button>
         </div>
 
@@ -184,16 +301,22 @@ function PaymentInner() {
                 <dd className="text-right font-medium">{v}</dd>
               </div>
             ))}
+            {method === "qris" && alloc && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-stone-500">Kode unik</dt>
+                <dd className="text-right font-medium text-teal-700">+{alloc.unique_code}</dd>
+              </div>
+            )}
             <div className="flex justify-between gap-3 border-t border-white/70 pt-2">
               <dt className="font-semibold">Total</dt>
-              <dd className="font-bold">{formatRp(amount)}</dd>
+              <dd className="font-bold">{formatRp(total)}</dd>
             </div>
           </dl>
           <div className="mt-4 rounded-2xl bg-white/60 p-3 text-xs leading-relaxed text-stone-500 ring-1 ring-white">
             {method === "qris" ? (
-              <>Setelah konfirmasi, pesananmu langsung diproses. Kalau server agent sudah siap, tim Malika akan menghubungimu.</>
+              <>Setelah konfirmasi, sistem mencocokkan kode unik pembayaranmu secara otomatis. Kalau server agent sudah siap, tim Malika akan menghubungimu.</>
             ) : (
-              <>Setelah konfirmasi, tim Finance Malika akan memverifikasi pembayaranmu lalu menghubungimu.</>
+              <>Setelah klik konfirmasi, kirim bukti transfer via WhatsApp. Tim Finance Malika akan memverifikasi pembayaranmu lalu menghubungimu.</>
             )}
           </div>
         </div>

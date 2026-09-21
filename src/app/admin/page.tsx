@@ -16,6 +16,8 @@ interface Order {
   bukti_filename: string;
   status: string;
   created_at: string;
+  unique_code: number | null;
+  code_expires_at: string;
 }
 
 const FILTERS = [
@@ -190,7 +192,14 @@ export default function AdminPage() {
                     <p>{o.telepon}</p>
                     <p className="text-stone-500">{o.email}</p>
                   </td>
-                  <td className="px-4 py-3 font-bold">{formatRp(o.amount)}</td>
+                  <td className="px-4 py-3">
+                    <p className="font-bold">{formatRp(o.amount)}</p>
+                    {o.unique_code != null && (
+                      <p className="mt-0.5 inline-block rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
+                        kode +{o.unique_code}
+                      </p>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${STATUS_STYLE[o.status] ?? "bg-stone-200 text-stone-600"}`}

@@ -17,6 +17,59 @@ export interface OrderPayload {
   method?: OrderMethod | "";
   bukti_filename?: string;
   status: OrderStatus;
+  unique_code?: number | null;
+  code_expires_at?: string;
+}
+
+/* Nomor WhatsApp admin untuk konfirmasi transfer (sama dengan di Footer). */
+export const ADMIN_WA = "628221114681";
+
+export function buildTransferWaLink(o: {
+  order_id: string;
+  product: string;
+  amount: number;
+  nama: string;
+}): string {
+  const msg =
+    `Halo Malika Agent, saya konfirmasi pembayaran transfer.\n\n` +
+    `Order: ${o.order_id}\n` +
+    `Produk: ${o.product}/bulan\n` +
+    `Total: Rp${o.amount.toLocaleString("id-ID")}\n` +
+    `Nama: ${o.nama}\n\n` +
+    `Silakan kirimkan bukti transfer untuk diverifikasi.`;
+  return `https://wa.me/${ADMIN_WA}?text=${encodeURIComponent(msg)}`;
+}
+
+export interface AllocatedCode {
+  unique_code: number;
+  expires_at: string;
+  base: number;
+  amount: number;
+  reused: boolean;
+}
+
+/* Minta kode unik 1-999 ke server (POST /api/allocate-code).
+   Return null bila API belum tersedia — caller wajib menangani fallback. */
+export async function allocateCode(order_id: string): Promise<AllocatedCode | null> {
+  try {
+    const res = await fetch("/api/allocate-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order_id }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Partial<AllocatedCode> & { ok?: boolean };
+    if (!data.ok || !Number.isFinite(Number(data.unique_code))) return null;
+    return {
+      unique_code: Math.round(Number(data.unique_code)),
+      expires_at: String(data.expires_at ?? ""),
+      base: Math.round(Number(data.base ?? 0)),
+      amount: Math.round(Number(data.amount ?? 0)),
+      reused: Boolean(data.reused),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const LS_KEY = "malika_orders";

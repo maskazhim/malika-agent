@@ -75,6 +75,8 @@ interface OrderBody {
   bukti_filename?: string;
   status?: string;
   created_at?: string;
+  unique_code?: number;
+  code_expires_at?: string;
 }
 
 const cors = {
@@ -84,7 +86,7 @@ const cors = {
 };
 
 const LIST_COLUMNS =
-  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at";
+  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at";
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
@@ -134,20 +136,24 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     bukti_filename: String(b.bukti_filename ?? "").slice(0, 256),
     status: String(b.status ?? "checkout").slice(0, 32),
     created_at: String(b.created_at ?? new Date().toISOString()).slice(0, 32),
+    unique_code: Number.isFinite(Number(b.unique_code)) ? Math.round(Number(b.unique_code)) : null,
+    code_expires_at: String(b.code_expires_at ?? "").slice(0, 32),
   };
 
   await env.DB.prepare(
-    `INSERT INTO orders (order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO orders (order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(order_id) DO UPDATE SET
        product=excluded.product, amount=excluded.amount, nama=excluded.nama,
        bisnis=excluded.bisnis, telepon=excluded.telepon, email=excluded.email,
        method=excluded.method, bukti_filename=excluded.bukti_filename,
-       status=excluded.status, created_at=excluded.created_at`
+       status=excluded.status, created_at=excluded.created_at,
+       unique_code=excluded.unique_code, code_expires_at=excluded.code_expires_at`
   )
     .bind(
       row.order_id, row.product, row.amount, row.nama, row.bisnis, row.telepon,
-      row.email, row.method, row.bukti_filename, row.status, row.created_at
+      row.email, row.method, row.bukti_filename, row.status, row.created_at,
+      row.unique_code, row.code_expires_at
     )
     .run();
 
@@ -173,7 +179,14 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   if (!order_id || !ADMIN_STATUSES.includes(status)) {
     return new Response(JSON.stringify({ error: "order_id & status valid required" }), { status: 400, headers: cors });
   }
-  const res = (await env.DB.prepare("UPDATE orders SET status = ? WHERE order_id = ?")
+  // Order final (verified/cancelled) langsung membebaskan kode uniknya
+  // agar bisa dipakai ulang oleh order lain.
+  const freeCode = status === "verified" || status === "cancelled";
+  const res = (await env.DB.prepare(
+    freeCode
+      ? "UPDATE orders SET status = ?, unique_code = NULL, code_expires_at = '' WHERE order_id = ?"
+      : "UPDATE orders SET status = ? WHERE order_id = ?"
+  )
     .bind(status, order_id)
     .run()) as { meta?: { changes?: number } };
   if (!res?.meta?.changes) {

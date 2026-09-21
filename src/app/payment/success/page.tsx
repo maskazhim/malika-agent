@@ -4,12 +4,15 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatRp } from "@/lib/qris";
+import { buildTransferWaLink } from "@/lib/orders";
 
 function SuccessInner() {
   const q = useSearchParams();
   const method = q.get("method") ?? "qris";
   const product = q.get("product") ?? "-";
   const amount = Number(q.get("amount") ?? 0);
+  const base = Number(q.get("base") ?? 0);
+  const uniqueCode = Number(q.get("unique_code") ?? 0);
   const nama = q.get("nama") ?? "-";
   const orderId = q.get("order_id") ?? "";
   const isTransfer = method === "transfer";
@@ -47,6 +50,18 @@ function SuccessInner() {
             <dt className="text-stone-500">Produk</dt>
             <dd className="font-medium">{product}/bulan</dd>
           </div>
+          {!isTransfer && base > 0 && uniqueCode > 0 && (
+            <>
+              <div className="flex justify-between gap-3">
+                <dt className="text-stone-500">Harga paket</dt>
+                <dd className="font-medium">{formatRp(base)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-stone-500">Kode unik</dt>
+                <dd className="font-medium text-teal-700">+{uniqueCode}</dd>
+              </div>
+            </>
+          )}
           <div className="flex justify-between gap-3">
             <dt className="text-stone-500">Total</dt>
             <dd className="font-bold">{amount ? formatRp(amount) : "-"}</dd>
@@ -64,12 +79,23 @@ function SuccessInner() {
         </dl>
 
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
-          <Link
-            href="/"
-            className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-          >
-            Kembali ke Beranda
-          </Link>
+          {isTransfer && orderId ? (
+            <a
+              href={buildTransferWaLink({ order_id: orderId, product, amount, nama })}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Kirim Bukti via WhatsApp
+            </a>
+          ) : (
+            <Link
+              href="/"
+              className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              Kembali ke Beranda
+            </Link>
+          )}
           <Link
             href="/#harga"
             className="rounded-full bg-white/70 px-6 py-2.5 text-sm font-semibold ring-1 ring-white hover:bg-white"

@@ -500,7 +500,7 @@ export const FAQS = [
   },
   {
     q: "Bagaimana cara bayar? Apakah bisa QRIS?",
-    a: "Bisa. Saat checkout kamu akan dapat QRIS dinamis dengan nominal paket yang dipilih. Sistem kami memverifikasi pembayaran otomatis — akun aktif segera setelah pembayaran terdeteksi.",
+    a: "Bisa. Saat checkout kamu dapat QRIS dinamis dengan total = harga paket + kode unik Rp1–Rp999. Kode unik membuat pembayaranmu terdeteksi otomatis — bayar sesuai total persis, jangan diubah. Sistem kami memverifikasi pembayaran otomatis — akun aktif segera setelah pembayaran terdeteksi.",
   },
   {
     q: "Apa itu skill? Apakah saya harus bisa prompt engineering?",
