@@ -19,6 +19,9 @@ const BANKS = [
   { bank: "MANDIRI", norek: "1370001310008", an: "PT TEKNOLOGI CENDEKIA NUSANTARA" },
 ];
 
+// QRIS disembunyikan sementara — ubah ke true untuk mengaktifkan lagi.
+const QRIS_ENABLED = false;
+
 function merchantName(payload: string): string {
   return parseQris(payload).find((f) => f.id === "59")?.value.trim() || "Merchant QRIS";
 }
@@ -34,7 +37,7 @@ function PaymentInner() {
   const email = q.get("email") ?? "-";
   const orderId = q.get("order_id") ?? "";
 
-  const [method, setMethod] = useState<OrderMethod>("qris");
+  const [method, setMethod] = useState<OrderMethod>(QRIS_ENABLED ? "qris" : "transfer");
   const [left, setLeft] = useState(30 * 60);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -171,7 +174,8 @@ function PaymentInner() {
         {product}/bulan · <span className="font-semibold text-stone-900">{formatRp(total)}</span> · a.n. {nama}
       </p>
 
-      {/* Pilihan metode */}
+      {/* Pilihan metode (QRIS disembunyikan sementara) */}
+      {QRIS_ENABLED && (
       <div className="glass mt-5 grid grid-cols-2 gap-1 rounded-2xl p-1 text-sm font-semibold">
         {(["qris", "transfer"] as OrderMethod[]).map((m) => (
           <button
@@ -185,6 +189,7 @@ function PaymentInner() {
           </button>
         ))}
       </div>
+      )}
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div className="glass-strong rounded-3xl p-6 text-center">
