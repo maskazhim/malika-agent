@@ -1,6 +1,6 @@
 import { USP, USE_CASES } from "@/data/demo";
 
-const USP_ICONS = ["🖥️", "⏰", "🧠", "🧩", "🔑", "🔌"];
+const USP_ICONS = ["💬", "➕", "⏰", "🖥️", "🧠", "🔑"];
 
 const TOOL_DOMAIN: Record<string, string> = {
   JobStreet: "jobstreet.co.id",
