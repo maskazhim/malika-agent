@@ -29,7 +29,9 @@ export default function Navbar() {
   }, [open ]);
 
   return (
-    <div className="fixed inset-x-0 top-3 z-50 px-3 sm:top-4">
+    <div className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:pt-4">
+      {/* lapisan kaca di belakang navbar: konten yang lewat di bawah jadi blur */}
+      <div className="pointer-events-none absolute inset-0 bg-white/30 backdrop-blur-xl [mask-image:linear-gradient(to_bottom,black_70%,transparent)]" />
       <div className="relative mx-auto w-full max-w-4xl">
         <header className="glass-strong w-full rounded-full py-2 pl-4 pr-2 sm:pl-5">
           <div className="flex h-12 items-center justify-between gap-2">

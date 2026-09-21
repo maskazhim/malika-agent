@@ -136,8 +136,7 @@ export default function Pricing() {
     <section id="harga" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-12 sm:px-6">
       <h2 className="text-center text-3xl font-semibold tracking-tight sm:text-4xl">Paket Harga</h2>
       <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-stone-600 sm:text-base">
-        Bayar bulanan via QRIS / Transfer Bank. Klik pilih — isi form — lanjut ke
-        halaman pembayaran.
+        Pakai Malika Agent berasa nambah karyawan, bukan nambah software.
       </p>
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
         {plans.map((p) => (
@@ -181,6 +180,12 @@ export default function Pricing() {
         ))}
       </div>
 
+      <p className="mx-auto mt-8 max-w-3xl text-center text-xs leading-relaxed text-stone-500">
+        Biaya penggunaan token AI menyesuaikan beban pekerjaan yang diberikan. Biaya Malika adalah biaya layanan
+        dan kredit AI. Anda bisa top up kredit AI Malika atau hubungkan ke langganan ChatGPT, Grok, atau Claude
+        yang Anda miliki untuk tambahan kredit AI.
+      </p>
+
       {active && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => setOpen(null)}>
           <div
@@ -194,13 +199,7 @@ export default function Pricing() {
                   {active.name} · {formatRp(active.priceInt)}
                   <span className="text-sm font-normal text-stone-500">{active.period}</span>
                 </h3>
-      </div>
-
-      <p className="mx-auto mt-8 max-w-3xl text-center text-xs leading-relaxed text-stone-500">
-        Biaya penggunaan token AI menyesuaikan beban pekerjaan yang diberikan. Biaya Malika adalah biaya layanan
-        dan kredit AI. Anda bisa top up kredit AI Malika atau hubungkan ke langganan ChatGPT, Grok, atau Claude
-        yang Anda miliki untuk tambahan kredit AI.
-      </p>
+              </div>
               <button onClick={() => setOpen(null)} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
             </div>
             <form onSubmit={submit} className="mt-5 space-y-3">

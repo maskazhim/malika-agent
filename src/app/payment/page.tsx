@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import QRCode from "react-qr-code";
 import { useRouter, useSearchParams } from "next/navigation";
-import { buildDynamicQris, formatRp, getStaticPayload, parseQris } from "@/lib/qris";
+import { buildDynamicQris, formatRp, getStaticPayload, isValidQris, parseQris } from "@/lib/qris";
 import {
   allocateCode,
   buildTransferWaLink,
@@ -67,6 +67,10 @@ function PaymentInner() {
         }
         setAlloc(a);
         const { payload } = getStaticPayload();
+        if (!isValidQris(payload)) {
+          setAllocError("QRIS merchant tidak valid. Hubungi tim Malika.");
+          return;
+        }
         const dyn = buildDynamicQris(payload, a.amount);
         if (!dyn) setAllocError("QRIS merchant tidak valid. Hubungi tim Malika.");
         else setQr(dyn);

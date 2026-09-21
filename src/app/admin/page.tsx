@@ -45,7 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
-  const [view, setView] = useState<"orders" | "pricing">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -157,7 +157,7 @@ export default function AdminPage() {
       </div>
 
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "pricing"] as const).map((v) => (
+        {(["orders", "pricing", "logs"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -165,13 +165,15 @@ export default function AdminPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Order" : "Harga Paket"}
+            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : "Log Pembayaran"}
           </button>
         ))}
       </div>
 
       {view === "pricing" ? (
         <PricingManager />
+      ) : view === "logs" ? (
+        <PaymentLogs />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -286,11 +288,143 @@ export default function AdminPage() {
   );
 }
 
+interface PayLog {
+  id: number;
+  received_at: string;
+  from_addr: string;
+  subject: string;
+  parsed_amounts: string;
+  matched_order: string;
+  action: string;
+  note: string;
+}
+
+const LOG_STYLE: Record<string, string> = {
+  verified: "bg-teal-100 text-teal-800",
+  needs_review: "bg-amber-100 text-amber-800",
+  ignored: "bg-stone-200 text-stone-600",
+};
+
+const LOG_FILTERS = [
+  { key: "", label: "Semua" },
+  { key: "verified", label: "Terverifikasi" },
+  { key: "needs_review", label: "Perlu review" },
+  { key: "ignored", label: "Diabaikan" },
+];
+
+function PaymentLogs() {
+  const [logs, setLogs] = useState<PayLog[]>([]);
+  const [filter, setFilter] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (action: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const url = action ? `/api/payment-logs?action=${encodeURIComponent(action)}` : "/api/payment-logs";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { logs?: PayLog[] };
+      setLogs(data.logs ?? []);
+    } catch {
+      setError("Gagal memuat log. Coba muat ulang.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load("");
+  }, [load]);
+
+  function changeFilter(key: string) {
+    setFilter(key);
+    void load(key);
+  }
+
+  function fmtAmounts(raw: string): string {
+    try {
+      const arr: unknown = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) return "-";
+      return arr.map((n) => formatRp(Number(n))).join(", ");
+    } catch {
+      return "-";
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="glass flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
+        {LOG_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => changeFilter(f.key)}
+            className={`rounded-xl px-4 py-2 transition ${
+              filter === f.key ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      {error && (
+        <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>
+      )}
+      <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat log…</p>
+        ) : logs.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">
+            Belum ada email diproses. Forward notifikasi pembayaran ke alamat Email Routing worker untuk mulai mencatat.
+          </p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Waktu</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
+                <th className="px-4 py-3 font-semibold">Nominal terdeteksi</th>
+                <th className="px-4 py-3 font-semibold">Order cocok</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((l) => (
+                <tr key={l.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3 text-xs text-stone-500">
+                    {l.received_at ? new Date(l.received_at).toLocaleString("id-ID") : "-"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="max-w-55 truncate text-xs font-medium">{l.subject || "(tanpa subjek)"}</p>
+                    <p className="max-w-55 truncate text-[11px] text-stone-400">{l.from_addr}</p>
+                    {l.note && <p className="mt-0.5 max-w-55 truncate text-[11px] text-stone-500">{l.note}</p>}
+                  </td>
+                  <td className="px-4 py-3 text-xs font-medium">{fmtAmounts(l.parsed_amounts)}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">
+                    {l.matched_order ? l.matched_order.slice(0, 8) + "…" : "-"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${LOG_STYLE[l.action] ?? "bg-stone-200 text-stone-600"}`}
+                    >
+                      {l.action === "verified" ? "Terverifikasi" : l.action === "needs_review" ? "Perlu review" : "Diabaikan"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface PlanRow {
   key: string;
   name: string;
-  price: number;
-  period: string;
+  price: number;  period: string;
   description: string;
   features: string[];
   cta: string;

@@ -35,7 +35,8 @@ interface Env {
 }
 
 const ACTIVE_STATUSES = ["checkout", "payment_proof"];
-const MIN_AMOUNT = 100_000;
+// Batas bawah longgar selama fase testing (transfer Rp1.000 ikut diproses).
+const MIN_AMOUNT = 500;
 const MAX_AMOUNT = 999_999_999;
 
 function stripHtml(html: string): string {
