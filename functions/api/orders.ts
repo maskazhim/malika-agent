@@ -28,6 +28,8 @@ interface D1Database {
 interface Env {
   DB: D1Database;
   SESSION_SECRET?: string;
+  RESEND_API_KEY?: string;
+  RESEND_FROM?: string;
 }
 
 /* --- Verifikasi sesi admin (disalin dari api/auth.ts agar tiap Function mandiri) --- */
@@ -192,6 +194,31 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
     .run()) as { meta?: { changes?: number } };
   if (!res?.meta?.changes) {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+  }
+  // Order baru saja verified -> kirim email konfirmasi pembayaran (best-effort).
+  if (status === "verified") {
+    try {
+      const order = await env.DB.prepare(
+        "SELECT order_id, product, amount, nama, email FROM orders WHERE order_id = ?"
+      )
+        .bind(order_id)
+        .first<{ order_id: string; product: string; amount: number; nama: string; email: string }>();
+      if (order && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email)) {
+        const { paymentConfirmedMail, sendMail } = await import("./_email");
+        const mail = await sendMail(env, {
+          to: order.email,
+          ...paymentConfirmedMail({
+            nama: order.nama,
+            product: order.product,
+            amount: order.amount,
+            order_id: order.order_id,
+          }),
+        });
+        console.log(`[orders] email verified ke ${order.email}: ${mail.ok ? "sent" : mail.error}`);
+      }
+    } catch (e) {
+      console.log(`[orders] email verified gagal: ${String(e).slice(0, 200)}`);
+    }
   }
   return Response.json({ ok: true, order_id, status }, { headers: cors });
 }

@@ -32,6 +32,8 @@ interface InboundEmail {
 }
 interface Env {
   DB: D1Database;
+  RESEND_API_KEY?: string;
+  RESEND_FROM?: string;
 }
 
 const ACTIVE_STATUSES = ["checkout", "payment_proof"];
@@ -75,9 +77,45 @@ interface ActiveOrder {
   order_id: string;
   product: string;
   nama: string;
+  email: string;
   amount: number;
   method: string;
   unique_code: number | null;
+}
+
+const DEFAULT_FROM = "Malika Agent <halo@malika.ai>";
+
+function fmtRp(n: number): string {
+  return "Rp" + Number(n).toLocaleString("id-ID");
+}
+
+/* Email konfirmasi pembayaran via Resend (best-effort, gagal kirim tidak
+   menggagalkan verifikasi). API key dari secret worker RESEND_API_KEY. */
+async function sendPaymentConfirmedMail(
+  env: Env,
+  o: { nama: string; product: string; amount: number; order_id: string; email: string }
+): Promise<void> {
+  const key = env.RESEND_API_KEY ?? "";
+  if (!key) {
+    console.log("[payment-watcher] RESEND_API_KEY belum diset — email dilewati");
+    return;
+  }
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: env.RESEND_FROM || DEFAULT_FROM,
+        to: o.email,
+        subject: `Pembayaran ${o.product} dikonfirmasi ✓`,
+        html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1d1d1f"><div style="background:linear-gradient(135deg,#77ffcd,#6c99fe);padding:20px 24px;border-radius:16px 16px 0 0"><div style="font-size:18px;font-weight:bold;color:#0c1a2b">Malika Agent</div></div><div style="background:#ffffff;border:1px solid #eee;border-top:0;padding:24px;border-radius:0 0 16px 16px"><p>Halo ${o.nama},</p><p>Pembayaranmu sudah kami terima dan <strong>terkonfirmasi</strong>:</p><ul><li>Produk: <strong>${o.product}/bulan</strong></li><li>Total: <strong>${fmtRp(o.amount)}</strong></li><li>Order: <code>${o.order_id}</code></li></ul><p>Setup server Malika Agent kamu memakan waktu <strong>1-3 hari kerja</strong> termasuk onboarding. Detail akses (URL, email, password) akan kami kirim via email terpisah setelah server siap.</p><p>Terima kasih sudah percaya Malika Agent!</p></div><p style="font-size:12px;color:#888;text-align:center">WhatsApp: +628221114681 · halo@malika.ai</p></div>`,
+        text: `Halo ${o.nama},\n\nPembayaran ${o.product}/bulan (${fmtRp(o.amount)}, order ${o.order_id}) sudah terkonfirmasi.\n\nSetup server memakan waktu 1-3 hari kerja termasuk onboarding. Detail akses akan dikirim via email terpisah.\n\nTerima kasih!\nMalika Agent`,
+      }),
+    });
+    console.log(`[payment-watcher] email ke ${o.email}: ${res.ok ? "sent" : `gagal ${res.status}`}`);
+  } catch (e) {
+    console.log(`[payment-watcher] email gagal: ${String(e).slice(0, 200)}`);
+  }
 }
 
 async function logPayment(
@@ -149,7 +187,7 @@ async function handleEmail(message: InboundEmail, env: Env): Promise<void> {
   const matched = new Map<string, ActiveOrder>();
   for (const amt of amounts) {
     const { results } = await env.DB.prepare(
-      `SELECT order_id, product, nama, amount, method, unique_code FROM orders
+      `SELECT order_id, product, nama, email, amount, method, unique_code FROM orders
        WHERE amount = ? AND status IN ('checkout','payment_proof')`
     )
       .bind(amt)
@@ -181,6 +219,15 @@ async function handleEmail(message: InboundEmail, env: Env): Promise<void> {
       .bind(o.order_id)
       .run();
     console.log(`[payment-watcher] VERIFIED ${o.order_id} (${o.product}, ${o.amount})`);
+    if (o.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email)) {
+      await sendPaymentConfirmedMail(env, {
+        nama: o.nama,
+        product: o.product,
+        amount: o.amount,
+        order_id: o.order_id,
+        email: o.email,
+      });
+    }
     await logPayment(env, {
       from_addr: from,
       subject,

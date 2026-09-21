@@ -45,7 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
-  const [view, setView] = useState<"orders" | "pricing" | "logs">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "clients">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -157,7 +157,7 @@ export default function AdminPage() {
       </div>
 
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "pricing", "logs"] as const).map((v) => (
+        {(["orders", "pricing", "logs", "clients"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -165,7 +165,7 @@ export default function AdminPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : "Log Pembayaran"}
+            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : "Akses Klien"}
           </button>
         ))}
       </div>
@@ -174,6 +174,8 @@ export default function AdminPage() {
         <PricingManager />
       ) : view === "logs" ? (
         <PaymentLogs />
+      ) : view === "clients" ? (
+        <ClientsManager />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -410,6 +412,176 @@ function PaymentLogs() {
                     >
                       {l.action === "verified" ? "Terverifikasi" : l.action === "needs_review" ? "Perlu review" : "Diabaikan"}
                     </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ClientRow {
+  id: number;
+  order_id: string;
+  client_name: string;
+  access_url: string;
+  email: string;
+  email_status: string;
+  created_at: string;
+}
+
+function ClientsManager() {
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [form, setForm] = useState({ client_name: "", access_url: "", email: "", password: "", order_id: "" });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/clients");
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { clients?: ClientRow[] };
+      setClients(data.clients ?? []);
+    } catch {
+      setMsg("Gagal memuat akses klien.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string; email_status?: string; email_error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setForm({ client_name: "", access_url: "", email: "", password: "", order_id: "" });
+      setMsg(
+        data.email_status === "sent"
+          ? "Akses tersimpan + email detail terkirim ke klien."
+          : `Akses tersimpan, tapi email gagal (${data.email_error ?? "unknown"}). Cek RESEND_API_KEY.`
+      );
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!window.confirm("Hapus akses klien ini?")) return;
+    try {
+      const res = await fetch(`/api/clients?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("gagal");
+      setClients((cs) => cs.filter((c) => c.id !== id));
+    } catch {
+      setMsg("Gagal menghapus.");
+    }
+  }
+
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((s) => ({ ...s, [k]: e.target.value }));
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Buat akses klien baru</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          URL boleh input singkat (cth. <code>kopi.malika.ai</code>) — otomatis jadi https://. Setelah disimpan,
+          email berisi URL + email + password langsung terkirim ke klien.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Nama klien</span>
+            <input value={form.client_name} onChange={set("client_name")} placeholder="cth. Kopi Nusantara" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">URL akses</span>
+            <input value={form.access_url} onChange={set("access_url")} placeholder="cth. kopi.malika.ai" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Email klien</span>
+            <input value={form.email} onChange={set("email")} type="email" placeholder="cth. owner@kopi.id" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Password (min. 8 karakter)</span>
+            <input value={form.password} onChange={set("password")} type="text" placeholder="cth. Kopi-2026-Aman" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Order ID terkait (opsional)</span>
+            <input value={form.order_id} onChange={set("order_id")} placeholder="cth. tempel order_id dari tabel Order" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 font-mono text-xs outline-none focus:border-teal-400" />
+          </label>
+        </div>
+        <button
+          type="submit"
+          disabled={saving}
+          className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+        >
+          {saving ? "Menyimpan + mengirim email…" : "Simpan + kirim email akses"}
+        </button>
+      </form>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat akses klien…</p>
+        ) : clients.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada akses klien.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Klien</th>
+                <th className="px-4 py-3 font-semibold">Akses</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clients.map((c) => (
+                <tr key={c.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3">
+                    <p className="font-semibold">{c.client_name}</p>
+                    <p className="text-[11px] text-stone-400">
+                      {c.created_at ? new Date(c.created_at).toLocaleString("id-ID") : "-"}
+                    </p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <a href={c.access_url} target="_blank" rel="noopener noreferrer" className="font-medium text-teal-700 hover:underline">
+                      {c.access_url.replace(/^https?:\/\//, "")}
+                    </a>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="text-xs">{c.email}</p>
+                    <p className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${c.email_status === "sent" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
+                      {c.email_status === "sent" ? "email terkirim" : `email: ${c.email_status}`}
+                    </p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => remove(c.id)}
+                      className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600"
+                    >
+                      Hapus
+                    </button>
                   </td>
                 </tr>
               ))}
