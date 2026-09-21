@@ -372,28 +372,28 @@ export const SHOWCASE_VIDEOS: ShowcaseVideo[] = [
 
 export const USP = [
   {
-    title: "Komputer sendiri, 24/7",
-    desc: "Agent berjalan di server Malika — tutup laptop, matikan HP, kerjaan tetap jalan.",
+    title: "Instruksi kayak chat ke manusia",
+    desc: "Nggak perlu prompt rumit atau alur teknis. Tulis \u201ctolong screening CV yang masuk hari ini\u201d, agent langsung jalan.",
   },
   {
-    title: "Rutinitas terjadwal",
-    desc: "Atur sekali (mis. tiap jam 8 pagi screening CV), agent mengulanginya otomatis tiap hari.",
+    title: "Nambah agent, semudah klik tombol",
+    desc: "Butuh tenaga baru? Kasih nama, kasih tugas. Nggak ada setup teknis, nggak ada coding.",
   },
   {
-    title: "Model AI custom per agent",
-    desc: "Tugas ringan pakai model hemat, tugas kompleks pakai model pintar. Fleksibel per agent.",
+    title: "Kerja sendiri sesuai jadwal",
+    desc: "Atur jadwal sekali, jalan tiap hari di server. Kamu nggak perlu minta, agent kerjain sesuai jadwal.",
   },
   {
-    title: "Skill installable",
-    desc: "Satu klik install skill = agent langsung ahli di domain itu. Tanpa prompt engineering.",
+    title: "Punya komputer dan browser sendiri",
+    desc: "Hampir semua kerjaan kita sekarang lewat browser. Agent pakai browser yang sama, jadi bisa kerjakan apa pun yang bisa dikerjakan manusia. Nggak butuh integrasi khusus. Laptop-mu nggak perlu nyala.",
   },
   {
-    title: "Bring Your Own Subscription",
-    desc: "Sambungkan langganan ChatGPT / Claude / Grok yang sudah kamu bayar. Tanpa bayar dobel.",
+    title: "Otak yang bisa disetel per agent",
+    desc: "Bisa pakai model paling pintar untuk kerjaan rumit. Bisa pakai model hemat untuk kerjaan remeh tapi banyak. Tagihan tetap terkendali.",
   },
   {
-    title: "Kerja di tools nyata",
-    desc: "Login & beroperasi langsung di JobStreet, Jurnal.id, Instagram, LinkedIn, Google Maps.",
+    title: "Pakai langganan yang sudah kamu punya",
+    desc: "Sambungkan ChatGPT, Claude, atau Grok yang sudah kamu bayar. Nggak bayar dobel.",
   },
 ];
 

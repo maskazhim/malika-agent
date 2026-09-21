@@ -104,12 +104,6 @@ export default function VideoShowcase() {
               );
             })}
           </div>
-
-          <p className="px-1 pt-3 text-xs text-stone-500">
-            Mau nambah video baru? Tambahkan entri ke{' '}
-            <code className="rounded bg-stone-900/5 px-1">SHOWCASE_VIDEOS</code> di{' '}
-            <code className="rounded bg-stone-900/5 px-1">src/data/demo.ts</code> — cukup isi youtubeId, judul, dan deskripsi.
-          </p>
         </div>
       </div>
     </section>

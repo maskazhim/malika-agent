@@ -16,10 +16,10 @@ export function UspGrid() {
   return (
     <section className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
       <h2 className="text-center text-3xl font-semibold tracking-tight sm:text-4xl">
-        Kenapa Malika Agent?
+        Kerja kayak karyawan. Tanpa ribet ngatur.
       </h2>
       <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-stone-600 sm:text-base">
-        Enam alasan bisnis Indonesia memilih AI teammate dibanding chatbot biasa atau otomasi kaku.
+        Enam alasan Malika Agent berasa kayak nambah karyawan, bukan nambah software.
       </p>
       <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {USP.map((u, i) => (
