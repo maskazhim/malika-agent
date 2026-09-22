@@ -36,6 +36,8 @@ function PaymentInner() {
   const telepon = q.get("telepon") ?? "-";
   const email = q.get("email") ?? "-";
   const orderId = q.get("order_id") ?? "";
+  const promoCode = (q.get("promo_code") ?? "").trim().toUpperCase();
+  const discount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
 
   const [method, setMethod] = useState<OrderMethod>(QRIS_ENABLED ? "qris" : "transfer");
   const [left, setLeft] = useState(30 * 60);
@@ -114,6 +116,7 @@ function PaymentInner() {
         method,
         bukti_filename: "",
         status: "payment_proof",
+        promo_code: promoCode,
       });
       window.open(buildTransferWaLink({ order_id: oid, product, amount, nama }), "_blank");
       const params = new URLSearchParams({
@@ -122,6 +125,8 @@ function PaymentInner() {
         amount: String(amount),
         nama,
         order_id: oid,
+        promo_code: promoCode,
+        discount: String(discount),
       });
       router.push(`/payment/success?${params.toString()}`);
       return;
@@ -147,6 +152,7 @@ function PaymentInner() {
       status: "payment_proof",
       unique_code: alloc.unique_code,
       code_expires_at: alloc.expires_at,
+      promo_code: promoCode,
     });
     const params = new URLSearchParams({
       method,
@@ -156,6 +162,8 @@ function PaymentInner() {
       unique_code: String(alloc.unique_code),
       nama,
       order_id: oid,
+      promo_code: promoCode,
+      discount: String(discount),
     });
     router.push(`/payment/success?${params.toString()}`);
   }
@@ -314,6 +322,12 @@ function PaymentInner() {
               <div className="flex justify-between gap-3">
                 <dt className="text-stone-500">Kode unik</dt>
                 <dd className="text-right font-medium text-teal-700">+{alloc.unique_code}</dd>
+              </div>
+            )}
+            {promoCode && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-stone-500">Promo {promoCode}</dt>
+                <dd className="text-right font-medium text-teal-700">−{formatRp(discount)}</dd>
               </div>
             )}
             <div className="flex justify-between gap-3 border-t border-white/70 pt-2">

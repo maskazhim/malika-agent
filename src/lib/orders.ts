@@ -19,6 +19,34 @@ export interface OrderPayload {
   status: OrderStatus;
   unique_code?: number | null;
   code_expires_at?: string;
+  promo_code?: string;
+}
+
+export interface PromoCheck {
+  code: string;
+  type: string;
+  value: number;
+}
+
+/* Validasi kode promo ke server. Return null bila tidak valid / API gagal. */
+export async function checkPromo(code: string): Promise<PromoCheck | null> {
+  const c = code.trim().toUpperCase();
+  if (!c) return null;
+  try {
+    const res = await fetch(`/api/promos?code=${encodeURIComponent(c)}`);
+    const data = (await res.json()) as Partial<PromoCheck> & { ok?: boolean };
+    if (!res.ok || !data.ok) return null;
+    return { code: String(data.code), type: String(data.type), value: Number(data.value) };
+  } catch {
+    return null;
+  }
+}
+
+/* Hitung diskon rupiah dari harga dasar. */
+export function calcDiscount(p: PromoCheck, base: number): number {
+  if (p.type === "fixed") return Math.max(0, Math.min(Math.round(p.value), base));
+  const pct = Math.max(0, Math.min(100, Math.round(p.value)));
+  return Math.round((base * pct) / 100);
 }
 
 /* Nomor WhatsApp admin untuk konfirmasi transfer (sama dengan di Footer). */

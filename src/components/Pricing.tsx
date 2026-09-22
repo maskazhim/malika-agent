@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PRICING } from "@/data/demo";
 import { formatRp } from "@/lib/qris";
-import { newOrderId, saveOrder } from "@/lib/orders";
+import { calcDiscount, newOrderId, saveOrder, type PromoCheck } from "@/lib/orders";
 
 const FALLBACK_AMOUNTS: Record<string, number> = {
   Starter: 1799000,
@@ -49,6 +49,11 @@ export default function Pricing() {
   const [open, setOpen] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({ nama: "", bisnis: "", telepon: "", email: "" });
   const [error, setError] = useState<string | null>(null);
+  // Kode promo
+  const [promoInput, setPromoInput] = useState("");
+  const [promo, setPromo] = useState<PromoCheck | null>(null);
+  const [promoMsg, setPromoMsg] = useState<string | null>(null);
+  const [promoChecking, setPromoChecking] = useState(false);
 
   // Harga live dari /api/pricing (bisa diubah via dashboard admin).
   // Gagal fetch → tetap pakai data statis di atas.
@@ -84,8 +89,27 @@ export default function Pricing() {
   }, []);
 
   const active = plans.find((p) => p.key === open) ?? null;
+  const discount = active && promo ? calcDiscount(promo, active.priceInt) : 0;
+  const finalAmount = active ? active.priceInt - discount : 0;
 
-  function submit(e: React.FormEvent) {
+  async function applyPromo() {
+    const code = promoInput.trim().toUpperCase();
+    if (!code) return;
+    setPromoChecking(true);
+    setPromoMsg(null);
+    // Validasi ke server (keaktifan, expiry, sisa kuota dicek di sini).
+    const re = await checkPromoSilent(code);
+    setPromoChecking(false);
+    if (re) setPromo(re);
+  }
+
+  function resetPromo() {
+    setPromoInput("");
+    setPromo(null);
+    setPromoMsg(null);
+  }
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     const f = {
       nama: form.nama.trim(),
@@ -109,24 +133,59 @@ export default function Pricing() {
       setError("Paket tidak valid.");
       return;
     }
+    // Validasi ulang promo sesaat sebelum checkout (cegah kuota habis di tengah jalan).
+    let finalPromo = promo;
+    if (promoInput.trim() && (!promo || promo.code !== promoInput.trim().toUpperCase())) {
+      const re = await checkPromoSilent(promoInput.trim());
+      if (!re) {
+        setError(promoMsg ?? "Kode promo tidak valid.");
+        return;
+      }
+      finalPromo = re;
+      setPromo(re);
+    }
+    const finalDiscount = finalPromo ? calcDiscount(finalPromo, active.priceInt) : 0;
+    const total = active.priceInt - finalDiscount;
     setError(null);
     const order_id = newOrderId();
     const q = new URLSearchParams({
       product: active.name,
-      amount: String(active.priceInt),
+      amount: String(total),
       order_id,
+      promo_code: finalPromo?.code ?? "",
+      discount: String(finalDiscount),
       ...f,
     });
     // Simpan order tahap checkout ke D1 (fallback localStorage bila API belum siap).
     void saveOrder({
       order_id,
       product: active.name,
-      amount: active.priceInt,
+      amount: total,
+      promo_code: finalPromo?.code ?? "",
       ...f,
       status: "checkout",
     });
     setOpen(null);
+    resetPromo();
     router.push(`/payment?${q.toString()}`);
+  }
+
+  // Validasi promo tanpa mengubah state pesan (untuk cek ulang sebelum submit).
+  async function checkPromoSilent(code: string): Promise<PromoCheck | null> {
+    try {
+      const res = await fetch(`/api/promos?code=${encodeURIComponent(code.toUpperCase())}`);
+      const data = (await res.json().catch(() => null)) as (PromoCheck & { ok?: boolean; error?: string }) | null;
+      if (!res.ok || !data?.ok) {
+        setPromo(null);
+        setPromoMsg(data?.error ?? "Kode promo tidak valid.");
+        return null;
+      }
+      return { code: String(data.code), type: String(data.type), value: Number(data.value) };
+    } catch {
+      setPromo(null);
+      setPromoMsg("Gagal memeriksa kode promo. Coba lagi.");
+      return null;
+    }
   }
 
   const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -169,6 +228,7 @@ export default function Pricing() {
               onClick={() => {
                 setOpen(p.key);
                 setError(null);
+                resetPromo();
               }}
               className={`mt-6 rounded-full px-5 py-2.5 text-center text-sm font-semibold transition hover:opacity-90 ${
                 p.popular ? "malika-gradient text-white" : "bg-stone-900 text-white hover:bg-stone-700"
@@ -187,7 +247,7 @@ export default function Pricing() {
       </p>
 
       {active && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => setOpen(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => { setOpen(null); resetPromo(); }}>
           <div
             className="glass-strong feed-in w-full max-w-md rounded-3xl p-7"
             onClick={(e) => e.stopPropagation()}
@@ -200,7 +260,7 @@ export default function Pricing() {
                   <span className="text-sm font-normal text-stone-500">{active.period}</span>
                 </h3>
               </div>
-              <button onClick={() => setOpen(null)} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
+              <button onClick={() => { setOpen(null); resetPromo(); }} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
             </div>
             <form onSubmit={submit} className="mt-5 space-y-3">
               <label className="block">
@@ -227,6 +287,44 @@ export default function Pricing() {
                 </label>
               ))}
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>}
+              <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Kode promo (opsional)</span>
+                {promo ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm">
+                      <span className="font-bold text-teal-700">{promo.code}</span>
+                      <span className="text-stone-500"> · hemat {formatRp(discount)}</span>
+                    </p>
+                    <button type="button" onClick={resetPromo} className="text-xs font-semibold text-stone-400 hover:text-red-600">
+                      Hapus
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      value={promoInput}
+                      onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                      placeholder="cth. HEMAT20"
+                      className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={applyPromo}
+                      disabled={promoChecking || !promoInput.trim()}
+                      className="shrink-0 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-stone-700 disabled:opacity-50"
+                    >
+                      {promoChecking ? "…" : "Pakai"}
+                    </button>
+                  </div>
+                )}
+                {promoMsg && <p className="mt-1 text-xs text-red-600">{promoMsg}</p>}
+                {promo && (
+                  <p className="mt-1 text-sm font-bold">
+                    Total: {formatRp(finalAmount)}
+                    <span className="ml-2 font-normal text-stone-400 line-through">{formatRp(active.priceInt)}</span>
+                  </p>
+                )}
+              </div>
               <button type="submit" className="malika-gradient w-full rounded-full py-2.5 text-sm font-semibold text-white transition hover:opacity-90">
                 Lanjut ke Pembayaran →
               </button>

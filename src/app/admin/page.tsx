@@ -18,6 +18,7 @@ interface Order {
   created_at: string;
   unique_code: number | null;
   code_expires_at: string;
+  promo_code: string;
 }
 
 const FILTERS = [
@@ -55,7 +56,7 @@ interface ClientAccess {
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
-  const [view, setView] = useState<"orders" | "pricing" | "logs">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -260,7 +261,7 @@ export default function AdminPage() {
       </div>
 
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "pricing", "logs"] as const).map((v) => (
+        {(["orders", "pricing", "logs", "promos"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -268,7 +269,7 @@ export default function AdminPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : "Log Pembayaran"}
+            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : "Kode Promo"}
           </button>
         ))}
       </div>
@@ -277,6 +278,8 @@ export default function AdminPage() {
         <PricingManager />
       ) : view === "logs" ? (
         <PaymentLogs />
+      ) : view === "promos" ? (
+        <PromoManager />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -370,6 +373,11 @@ export default function AdminPage() {
                     {o.unique_code != null && (
                       <p className="mt-0.5 inline-block rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
                         kode +{o.unique_code}
+                      </p>
+                    )}
+                    {o.promo_code && (
+                      <p className="mt-0.5 inline-block rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
+                        {o.promo_code}
                       </p>
                     )}
                   </td>
@@ -664,6 +672,193 @@ function PaymentLogs() {
   );
 }
 
+
+interface PromoRow {
+  code: string;
+  type: string;
+  value: number;
+  max_uses: number;
+  used_count: number;
+  active: number;
+  expires_at: string;
+  created_at: string;
+}
+
+function PromoManager() {
+  const [promos, setPromos] = useState<PromoRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [form, setForm] = useState({ code: "", type: "percent", value: "", max_uses: "", expires_at: "", active: true });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/promos");
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { promos?: PromoRow[] };
+      setPromos(data.promos ?? []);
+    } catch {
+      setMsg("Gagal memuat kode promo.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/promos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: form.code,
+          type: form.type,
+          value: Number(form.value),
+          max_uses: Number(form.max_uses || 0),
+          expires_at: form.expires_at,
+          active: form.active,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setForm({ code: "", type: "percent", value: "", max_uses: "", expires_at: "", active: true });
+      setMsg("Kode promo tersimpan — langsung bisa dipakai saat checkout.");
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggle(p: PromoRow) {
+    try {
+      const res = await fetch("/api/promos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: p.code, type: p.type, value: p.value, max_uses: p.max_uses, expires_at: p.expires_at, active: !p.active }),
+      });
+      if (!res.ok) throw new Error("gagal");
+      void load();
+    } catch {
+      setMsg("Gagal mengubah status.");
+    }
+  }
+
+  async function remove(code: string) {
+    if (!window.confirm(`Hapus kode ${code}?`)) return;
+    try {
+      const res = await fetch(`/api/promos?code=${encodeURIComponent(code)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("gagal");
+      setPromos((ps) => ps.filter((p) => p.code !== code));
+    } catch {
+      setMsg("Gagal menghapus.");
+    }
+  }
+
+  const set = (k: "code" | "type" | "value" | "max_uses" | "expires_at") => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((s) => ({ ...s, [k]: k === "code" ? e.target.value.toUpperCase() : e.target.value }));
+
+  function desc(p: PromoRow): string {
+    return p.type === "fixed" ? `Potongan ${formatRp(p.value)}` : `Diskon ${p.value}%`;
+  }
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Buat / update kode promo</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Kode</span>
+            <input value={form.code} onChange={set("code")} placeholder="cth. HEMAT20" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Tipe</span>
+            <select value={form.type} onChange={set("type")} className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400">
+              <option value="percent">Persen (%)</option>
+              <option value="fixed">Nominal (Rp)</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Nilai {form.type === "fixed" ? "(Rp)" : "(1-100)"}</span>
+            <input value={form.value} onChange={set("value")} type="number" min={1} placeholder={form.type === "fixed" ? "cth. 200000" : "cth. 20"} className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Maks. pakai (0 = tanpa batas)</span>
+            <input value={form.max_uses} onChange={set("max_uses")} type="number" min={0} placeholder="cth. 50" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Kedaluwarsa (opsional)</span>
+            <input value={form.expires_at} onChange={set("expires_at")} type="date" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="flex items-end gap-2 pb-2 text-xs font-semibold text-stone-600">
+            <input type="checkbox" checked={form.active} onChange={(e) => setForm((s) => ({ ...s, active: e.target.checked }))} className="h-4 w-4 accent-teal-600" />
+            Aktif
+          </label>
+        </div>
+        <button type="submit" disabled={saving} className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+          {saving ? "Menyimpan…" : "Simpan kode promo"}
+        </button>
+      </form>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat kode promo…</p>
+        ) : promos.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada kode promo.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Kode</th>
+                <th className="px-4 py-3 font-semibold">Potongan</th>
+                <th className="px-4 py-3 font-semibold">Terpakai</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {promos.map((p) => (
+                <tr key={p.code} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3 font-mono font-bold">{p.code}</td>
+                  <td className="px-4 py-3 text-xs">{desc(p)}</td>
+                  <td className="px-4 py-3 text-xs font-medium">
+                    {p.used_count}{p.max_uses > 0 ? ` / ${p.max_uses}` : " / ∞"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${p.active ? "bg-teal-100 text-teal-800" : "bg-stone-200 text-stone-500"}`}>
+                      {p.active ? "Aktif" : "Nonaktif"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      <button onClick={() => toggle(p)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
+                        {p.active ? "Nonaktifkan" : "Aktifkan"}
+                      </button>
+                      <button onClick={() => remove(p.code)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600">
+                        Hapus
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface PlanRow {
   key: string;

@@ -81,6 +81,7 @@ interface ActiveOrder {
   amount: number;
   method: string;
   unique_code: number | null;
+  promo_code: string;
 }
 
 const DEFAULT_FROM = "Malika Agent <noreply@malikaagent.my.id>";
@@ -188,7 +189,7 @@ async function handleEmail(message: InboundEmail, env: Env): Promise<void> {
   const matched = new Map<string, ActiveOrder>();
   for (const amt of amounts) {
     const { results } = await env.DB.prepare(
-      `SELECT order_id, product, nama, email, amount, method, unique_code FROM orders
+      `SELECT order_id, product, nama, email, amount, method, unique_code, promo_code FROM orders
        WHERE amount = ? AND status IN ('checkout','payment_proof')`
     )
       .bind(amt)
@@ -214,11 +215,23 @@ async function handleEmail(message: InboundEmail, env: Env): Promise<void> {
   // Auto-verify hanya bila tepat 1 order QRIS yang cocok.
   if (orders.length === 1 && qrisOrders.length === 1) {
     const o = qrisOrders[0];
-    await env.DB.prepare(
-      "UPDATE orders SET status = 'verified', unique_code = NULL, code_expires_at = '' WHERE order_id = ?"
+    // Kondisional: kalau admin sudah verifikasi duluan, lewati (hindari dobel hitung).
+    const upd = (await env.DB.prepare(
+      `UPDATE orders SET status = 'verified', unique_code = NULL, code_expires_at = ''
+       WHERE order_id = ? AND status IN ('checkout','payment_proof')`
     )
       .bind(o.order_id)
-      .run();
+      .run()) as { meta?: { changes?: number } };
+    if (!upd?.meta?.changes) {
+      console.log(`[payment-watcher] ${o.order_id} sudah ditangani, lewati`);
+      return;
+    }
+    if (o.promo_code) {
+      await env.DB.prepare("UPDATE promos SET used_count = used_count + 1 WHERE code = ?")
+        .bind(o.promo_code)
+        .run()
+        .catch(() => {});
+    }
     console.log(`[payment-watcher] VERIFIED ${o.order_id} (${o.product}, ${o.amount})`);
     if (o.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email)) {
       await sendPaymentConfirmedMail(env, {

@@ -15,6 +15,8 @@ function SuccessInner() {
   const uniqueCode = Number(q.get("unique_code") ?? 0);
   const nama = q.get("nama") ?? "-";
   const orderId = q.get("order_id") ?? "";
+  const promoCode = (q.get("promo_code") ?? "").trim().toUpperCase();
+  const discount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
   const isTransfer = method === "transfer";
 
   return (
@@ -61,6 +63,12 @@ function SuccessInner() {
                 <dd className="font-medium text-teal-700">+{uniqueCode}</dd>
               </div>
             </>
+          )}
+          {promoCode && (
+            <div className="flex justify-between gap-3">
+              <dt className="text-stone-500">Promo {promoCode}</dt>
+              <dd className="font-medium text-teal-700">−{formatRp(discount)}</dd>
+            </div>
           )}
           <div className="flex justify-between gap-3">
             <dt className="text-stone-500">Total</dt>
