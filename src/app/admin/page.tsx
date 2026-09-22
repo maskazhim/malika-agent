@@ -24,7 +24,7 @@ const FILTERS = [
   { key: "", label: "Semua" },
   { key: "payment_proof", label: "Perlu verifikasi" },
   { key: "verified", label: "Terverifikasi" },
-  { key: "checkout", label: "Checkout" },
+  { key: "checkout", label: "Belum bayar" },
   { key: "cancelled", label: "Batal" },
 ];
 
@@ -38,7 +38,7 @@ const STATUS_STYLE: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   payment_proof: "Perlu verifikasi",
   verified: "Terverifikasi",
-  checkout: "Checkout",
+  checkout: "Belum bayar",
   cancelled: "Batal",
 };
 
