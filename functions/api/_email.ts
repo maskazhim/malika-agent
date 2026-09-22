@@ -59,7 +59,7 @@ const WRAP = (inner: string) => `
   <div style="background:#ffffff;border:1px solid #eee;border-top:0;padding:24px;border-radius:0 0 16px 16px">
     ${inner}
   </div>
-  <p style="font-size:12px;color:#888;text-align:center">WhatsApp: +628221114681 · halo@malika.ai</p>
+  <p style="font-size:12px;color:#888;text-align:center">WhatsApp: +6282211114681 · halo@malika.ai</p>
 </div>`;
 
 export function paymentConfirmedMail(o: {

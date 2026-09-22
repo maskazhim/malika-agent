@@ -22,7 +22,7 @@ export default function Footer() {
         <div>
           <p className="text-sm font-semibold text-white">Kontak</p>
           <ul className="mt-3 space-y-2 text-sm">
-            <li>WhatsApp: +628221114681</li>
+            <li>WhatsApp: +6282211114681</li>
             <li>Email: halo@malika.ai</li>
             <li>Yogyakarta, Indonesia</li>
           </ul>

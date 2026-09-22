@@ -46,3 +46,4 @@ agent-ai/
 # payment worker: source ikut repo, deps & build lokal jangan
 payment-worker/node_modules
 payment-worker/.wrangler
+payment-worker/wrangler.account*.jsonc

@@ -22,7 +22,7 @@ export interface OrderPayload {
 }
 
 /* Nomor WhatsApp admin untuk konfirmasi transfer (sama dengan di Footer). */
-export const ADMIN_WA = "628221114681";
+export const ADMIN_WA = "6282211114681";
 
 export function buildTransferWaLink(o: {
   order_id: string;
