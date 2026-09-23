@@ -134,7 +134,7 @@ export function accountReadyMail(c: {
       <li>Password: <strong>${c.password}</strong></li>
     </ul>
     <p>📎 Panduan onboarding terlampir di email ini (${ONBOARDING_PDF_NAME}).<br>
-    📖 Dokumentasi lengkap: <a href="${DOCS_URL}">${DOCS_URL}</a></p>
+    📖 <a href="${DOCS_URL}">Klik untuk lihat Dokumentasi Malika Agent</a></p>
     <p>Simpan baik-baik dan jangan bagikan ke siapa pun. Kalau ada kendala login, balas email ini atau hubungi WhatsApp kami.</p>
     <p>Selamat bekerja dengan karyawan digital barumu!</p>`;
   return {
