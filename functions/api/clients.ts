@@ -6,7 +6,7 @@
    - DELETE ?id=xxx — hapus akses
 */
 
-import { accountReadyMail, sendMail, sha256Hex } from "./_email";
+import { accountReadyMail, fetchOnboardingPdf, sendMail, sha256Hex } from "./_email";
 import {
   canSendCredential,
   canViewClients,
@@ -111,9 +111,12 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   const id = res?.meta?.last_row_id ?? 0;
 
   // Kirim email detail akses (password asli hanya dipakai di sini, tidak disimpan).
+  // PDF onboarding diambil live dari Drive dan dilampirkan.
+  const pdf = await fetchOnboardingPdf();
   const mail = await sendMail(env, {
     to: email,
     ...accountReadyMail({ client_name, access_url, email, password }),
+    attachments: pdf ? [pdf] : [],
   });
   await env.DB.prepare("UPDATE clients SET email_status = ? WHERE id = ?")
     .bind(mail.ok ? "sent" : "failed", id)

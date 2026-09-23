@@ -13,6 +13,37 @@ export interface EnvWithMail {
 export const DEFAULT_FROM = "Malika Agent <noreply@malikaagent.my.id>";
 export const REPLY_TO = "halo@malika.ai";
 
+/* PDF onboarding + dokumentasi yang ikut di email credential. */
+export const ONBOARDING_PDF_URL =
+  "https://drive.google.com/uc?export=download&id=1PesE5eWfUWUl9_j-e7VMAbaazkZPfnjm";
+export const ONBOARDING_PDF_NAME = "Onboarding-Malika-Agent.pdf";
+export const DOCS_URL = "https://docs.malika.ai/s/08afd73a-82a1-4319-8c3d-e6d7af88eaf0";
+
+export interface MailAttachment {
+  filename: string;
+  content: string; // base64
+}
+
+export async function fetchOnboardingPdf(): Promise<MailAttachment | null> {
+  try {
+    const res = await fetch(ONBOARDING_PDF_URL, { redirect: "follow" });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    if (!buf.byteLength || buf.byteLength > 20 * 1024 * 1024) return null;
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const CHUNK = 8192;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    // Sanity: harus diawali header PDF.
+    if (!bin.startsWith("%PDF")) return null;
+    return { filename: ONBOARDING_PDF_NAME, content: btoa(bin) };
+  } catch {
+    return null;
+  }
+}
+
 export function fmtRp(n: number): string {
   return "Rp" + Number(n).toLocaleString("id-ID");
 }
@@ -24,7 +55,7 @@ export async function sha256Hex(s: string): Promise<string> {
 
 export async function sendMail(
   env: EnvWithMail,
-  msg: { to: string; subject: string; html: string; text: string }
+  msg: { to: string; subject: string; html: string; text: string; attachments?: MailAttachment[] }
 ): Promise<{ ok: boolean; error?: string }> {
   const key = env.RESEND_API_KEY ?? "";
   if (!key) return { ok: false, error: "RESEND_API_KEY belum diset" };
@@ -39,6 +70,7 @@ export async function sendMail(
         subject: msg.subject,
         html: msg.html,
         text: msg.text,
+        attachments: (msg.attachments ?? []).map((a) => ({ filename: a.filename, content: a.content })),
       }),
     });
     if (!res.ok) {
@@ -101,11 +133,13 @@ export function accountReadyMail(c: {
       <li>Email: <strong>${c.email}</strong></li>
       <li>Password: <strong>${c.password}</strong></li>
     </ul>
+    <p>📎 Panduan onboarding terlampir di email ini (${ONBOARDING_PDF_NAME}).<br>
+    📖 Dokumentasi lengkap: <a href="${DOCS_URL}">${DOCS_URL}</a></p>
     <p>Simpan baik-baik dan jangan bagikan ke siapa pun. Kalau ada kendala login, balas email ini atau hubungi WhatsApp kami.</p>
     <p>Selamat bekerja dengan karyawan digital barumu!</p>`;
   return {
     subject,
     html: WRAP(inner),
-    text: `Halo ${c.client_name},\n\nServer Malika Agent kamu sudah siap.\n\nURL akses: ${c.access_url}\nEmail: ${c.email}\nPassword: ${c.password}\n\nSimpan baik-baik dan jangan bagikan ke siapa pun.\n\nMalika Agent`,
+    text: `Halo ${c.client_name},\n\nServer Malika Agent kamu sudah siap.\n\nURL akses: ${c.access_url}\nEmail: ${c.email}\nPassword: ${c.password}\n\nPanduan onboarding terlampir di email ini.\nDokumentasi lengkap: ${DOCS_URL}\n\nSimpan baik-baik dan jangan bagikan ke siapa pun.\n\nMalika Agent`,
   };
 }
