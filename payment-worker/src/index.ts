@@ -286,4 +286,90 @@ export default {
       headers: { "Content-Type": "text/plain" },
     });
   },
+
+  /* Cron harian: reminder perpanjangan langganan (30 hari dari retensi_at).
+     H-7 dan H-1 untuk order retensi/resubscribe, sekali tiap titik
+     (dilacak via last_reminder_at = "YYYY-MM-DD|H7/H1"). */
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    if (!env.DB) {
+      console.log("[payment-watcher] cron: D1 not bound");
+      return;
+    }
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT order_id, product, nama, email, amount, retensi_at, renewal_count, last_reminder_at FROM orders
+         WHERE status IN ('retensi','resubscribe') AND retensi_at != ''`
+      ).all<{
+        order_id: string;
+        product: string;
+        nama: string;
+        email: string;
+        amount: number;
+        retensi_at: string;
+        renewal_count: number;
+        last_reminder_at: string;
+      }>();
+      const now = Date.now();
+      for (const o of results ?? []) {
+        const expiry = new Date(o.retensi_at).getTime() + 30 * 864e5;
+        if (!Number.isFinite(expiry) || expiry <= now) continue;
+        const daysLeft = Math.round((expiry - now) / 864e5);
+        const tag = daysLeft <= 1 ? "H1" : daysLeft <= 7 ? "H7" : "";
+        if (!tag) continue;
+        const expiryDay = new Date(expiry).toISOString().slice(0, 10);
+        if (o.last_reminder_at === `${expiryDay}|${tag}`) continue;
+        if (!o.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email)) continue;
+        await sendRenewalReminder(env, { ...o, tag, expiryDay });
+        await env.DB.prepare("UPDATE orders SET last_reminder_at = ? WHERE order_id = ?")
+          .bind(`${expiryDay}|${tag}`, o.order_id)
+          .run()
+          .catch(() => {});
+      }
+    } catch (e) {
+      console.log(`[payment-watcher] cron error: ${String(e).slice(0, 200)}`);
+    }
+  },
 };
+
+async function sendRenewalReminder(
+  env: Env,
+  o: {
+    nama: string;
+    product: string;
+    amount: number;
+    order_id: string;
+    email: string;
+    renewal_count: number;
+    tag: string;
+    expiryDay: string;
+  }
+): Promise<void> {
+  const key = env.RESEND_API_KEY ?? "";
+  if (!key) {
+    console.log("[payment-watcher] cron: RESEND_API_KEY belum diset — reminder dilewati");
+    return;
+  }
+  const when = o.tag === "H1" ? "besok" : "7 hari lagi";
+  const expId = new Date(o.expiryDay + "T00:00:00Z").toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: env.RESEND_FROM || DEFAULT_FROM,
+        reply_to: "halo@malika.ai",
+        to: o.email,
+        subject: `Langganan Malika Agent berakhir ${when} — perpanjang yuk`,
+        html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1d1d1f"><div style="background:linear-gradient(135deg,#77ffcd,#6c99fe);padding:20px 24px;border-radius:16px 16px 0 0"><div style="font-size:18px;font-weight:bold;color:#0c1a2b">Malika Agent</div></div><div style="background:#ffffff;border:1px solid #eee;border-top:0;padding:24px;border-radius:0 0 16px 16px"><p>Halo ${o.nama},</p><p>Masa aktif <strong>${o.product}</strong> kamu berakhir <strong>${expId}</strong>${o.renewal_count > 0 ? ` (perpanjangan ke-${o.renewal_count})` : ""}.</p><p>Perpanjang sekarang agar agent tetap bekerja tanpa jeda — cukup balas email ini atau hubungi WhatsApp kami.</p><p>Order: <code>${o.order_id}</code> · Terakhir: <strong>${fmtRp(o.amount)}</strong></p></div><p style="font-size:12px;color:#888;text-align:center">WhatsApp: +6282211114681 · halo@malika.ai</p></div>`,
+        text: `Halo ${o.nama},\n\nMasa aktif ${o.product} berakhir ${expId}. Perpanjang sekarang agar agent tetap bekerja tanpa jeda — balas email ini atau hubungi WhatsApp kami.\n\nOrder: ${o.order_id}`,
+      }),
+    });
+    console.log(`[payment-watcher] reminder ${o.tag} ke ${o.email}: ${res.ok ? "sent" : `gagal ${res.status}`}`);
+  } catch (e) {
+    console.log(`[payment-watcher] reminder gagal: ${String(e).slice(0, 200)}`);
+  }
+}

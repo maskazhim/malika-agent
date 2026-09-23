@@ -1,16 +1,14 @@
 /* Cloudflare Pages Functions — /api/orders
    Menyimpan daftar order ke D1 (binding `DB`).
-   Deploy: output statis Next (`out/`) + file ini sebagai Functions.
-   Setup sekali:
-     wrangler d1 create malika_orders
-     wrangler d1 execute malika_orders --file=./migrations/0001_orders.sql
-     # Pages > Settings > Functions > D1 database bindings: Variable `DB` -> malika_orders
-     # Env: ADMIN_PASSCODE_HASH + SESSION_SECRET (untuk endpoint admin)
+   Pipeline: checkout -> payment_proof -> verified -> setup_server -> retensi
+   (cabang retensi -> churn / resubscribe), plus cancelled.
+   Akses dibatasi sesi staff + matriks divisi (lihat _auth.ts).
 
    Akses:
       POST   publik   — simpan/upsert order (checkout & konfirmasi bayar)
-      GET    ?order_id=xxx publik (cek satu order); tanpa param = daftar (khusus admin)
-      PATCH  khusus admin — update status order
+      GET    ?order_id=xxx publik (cek satu order); tanpa param = daftar (staff,
+             difilter sesuai divisi; ?status=xxx opsional)
+      PATCH  staff sesuai matriks — update status / flag onboard_done
       DELETE khusus admin — hapus order permanen
 */
 
@@ -32,39 +30,15 @@ interface Env {
   RESEND_FROM?: string;
 }
 
-/* --- Verifikasi sesi admin (disalin dari api/auth.ts agar tiap Function mandiri) --- */
-async function hmacHex(secret: string, msg: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let d = 0;
-  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return d === 0;
-}
-
-async function isAdmin(req: Request, env: Env): Promise<boolean> {
-  const secret = env.SESSION_SECRET ?? "";
-  if (!secret) return false;
-  const m = (req.headers.get("cookie") ?? "").match(/(?:^|;\s*)malika_admin=([^;]+)/);
-  if (!m) return false;
-  const parts = decodeURIComponent(m[1]).split(".");
-  if (parts.length !== 3) return false;
-  const [expHex, rand, sig] = parts;
-  const exp = parseInt(expHex, 16);
-  if (!Number.isFinite(exp) || exp < Date.now() / 1000) return false;
-  if (!/^[0-9a-f]{32}$/.test(rand)) return false;
-  return timingSafeEqual(await hmacHex(secret, `${expHex}.${rand}`), sig.toLowerCase());
-}
+import {
+  canDeleteOrder,
+  canSetOnboard,
+  canTransition,
+  cors,
+  getSession,
+  visibleStages,
+  type Session,
+} from "./_auth";
 
 interface OrderBody {
   order_id?: string;
@@ -83,21 +57,15 @@ interface OrderBody {
   promo_code?: string;
 }
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, GET, PATCH, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
 const LIST_COLUMNS =
-  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code";
+  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code, onboard_done, retensi_at, renewal_count";
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
 }
 
 // GET /api/orders?order_id=xxx — cek satu order (publik).
-// GET /api/orders[?status=xxx] — daftar order (khusus admin, perlu cookie sesi).
+// GET /api/orders[?status=xxx] — daftar order (staff, difilter divisi).
 export async function onRequestGet({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const params = new URL(request.url).searchParams;
@@ -107,13 +75,25 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     if (!row) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
     return Response.json(row, { headers: cors });
   }
-  if (!(await isAdmin(request, env))) {
+  const s = await getSession(request, env);
+  if (!s) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
+  const allowed = visibleStages(s);
   const status = (params.get("status") ?? "").slice(0, 32);
-  const { results } = status
-    ? await env.DB.prepare(`SELECT ${LIST_COLUMNS} FROM orders WHERE status = ? ORDER BY id DESC LIMIT 200`).bind(status).all()
-    : await env.DB.prepare(`SELECT ${LIST_COLUMNS} FROM orders ORDER BY id DESC LIMIT 200`).all();
+  const wanted = status ? [status] : null;
+  const stages = wanted ?? allowed;
+  let query = `SELECT ${LIST_COLUMNS} FROM orders`;
+  const vals: unknown[] = [];
+  if (stages) {
+    if (stages.length === 0) return Response.json({ orders: [] }, { headers: cors });
+    query += ` WHERE status IN (${stages.map(() => "?").join(",")})`;
+    vals.push(...stages);
+  }
+  query += " ORDER BY id DESC LIMIT 200";
+  const { results } = await env.DB.prepare(query)
+    .bind(...vals)
+    .all();
   return Response.json({ orders: results }, { headers: cors });
 }
 
@@ -166,45 +146,100 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   return Response.json({ ok: true, order_id }, { headers: cors });
 }
 
-const ADMIN_STATUSES = ["checkout", "payment_proof", "verified", "cancelled"];
+const KNOWN_STATUSES = [
+  "checkout",
+  "payment_proof",
+  "verified",
+  "setup_server",
+  "retensi",
+  "churn",
+  "resubscribe",
+  "cancelled",
+];
 
-// PATCH /api/orders {order_id, status} — khusus admin (mis. tandai terverifikasi).
+// PATCH /api/orders {order_id, status?, onboard_done?} — staff sesuai matriks.
 export async function onRequestPatch({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
-  if (!(await isAdmin(request, env))) {
+  const s: Session | null = await getSession(request, env);
+  if (!s) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
-  let b: { order_id?: unknown; status?: unknown };
+  let b: { order_id?: unknown; status?: unknown; onboard_done?: unknown };
   try {
-    b = (await request.json()) as { order_id?: unknown; status?: unknown };
+    b = (await request.json()) as { order_id?: unknown; status?: unknown; onboard_done?: unknown };
   } catch {
     return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
   }
   const order_id = String(b.order_id ?? "").slice(0, 64);
-  const status = String(b.status ?? "");
-  if (!order_id || !ADMIN_STATUSES.includes(status)) {
-    return new Response(JSON.stringify({ error: "order_id & status valid required" }), { status: 400, headers: cors });
-  }
-  // Ambil status + promo lama dulu (untuk hitung used_count tepat sekali).
-  const before = await env.DB.prepare("SELECT status, promo_code FROM orders WHERE order_id = ?")
-    .bind(order_id)
-    .first<{ status: string; promo_code: string }>();
-  if (!before) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
-  // Order final (verified/cancelled) langsung membebaskan kode uniknya
-  // agar bisa dipakai ulang oleh order lain.
-  const freeCode = status === "verified" || status === "cancelled";
-  const res = (await env.DB.prepare(
-    freeCode
-      ? "UPDATE orders SET status = ?, unique_code = NULL, code_expires_at = '' WHERE order_id = ?"
-      : "UPDATE orders SET status = ? WHERE order_id = ?"
+  if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
+
+  // Ambil status + promo lama dulu (untuk guard transisi & hitung used_count tepat sekali).
+  const before = await env.DB.prepare(
+    "SELECT status, promo_code, retensi_at FROM orders WHERE order_id = ?"
   )
-    .bind(status, order_id)
-    .run()) as { meta?: { changes?: number } };
-  if (!res?.meta?.changes) {
-    return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+    .bind(order_id)
+    .first<{ status: string; promo_code: string; retensi_at: string }>();
+  if (!before) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+
+  const changed: string[] = [];
+
+  // 1) Flag onboarding paralel.
+  if (b.onboard_done !== undefined) {
+    if (!canSetOnboard(s)) {
+      return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
+    }
+    await env.DB.prepare("UPDATE orders SET onboard_done = ? WHERE order_id = ?")
+      .bind(b.onboard_done ? 1 : 0, order_id)
+      .run();
+    changed.push("onboard_done");
   }
+
+  // 2) Pindah status pipeline.
+  const status = b.status !== undefined ? String(b.status) : "";
+  if (status) {
+    if (!KNOWN_STATUSES.includes(status)) {
+      return new Response(JSON.stringify({ error: "status tidak valid" }), { status: 400, headers: cors });
+    }
+    if (status !== before.status && !canTransition(s, before.status, status)) {
+      return new Response(JSON.stringify({ error: "forbidden untuk divisimu" }), { status: 403, headers: cors });
+    }
+    if (status !== before.status) {
+      // Order final (verified/cancelled) langsung membebaskan kode uniknya
+      // agar bisa dipakai ulang oleh order lain.
+      const freeCode = status === "verified" || status === "cancelled";
+      const nowIso = new Date().toISOString();
+      if (status === "resubscribe") {
+        // Perpanjang: +1 hitungan, masa aktif 30 hari dihitung ulang dari sekarang.
+        await env.DB.prepare(
+          "UPDATE orders SET status = ?, renewal_count = renewal_count + 1, retensi_at = ? WHERE order_id = ?"
+        )
+          .bind(status, nowIso, order_id)
+          .run();
+      } else if (status === "retensi" && !before.retensi_at) {
+        await env.DB.prepare("UPDATE orders SET status = ?, retensi_at = ? WHERE order_id = ?")
+          .bind(status, nowIso, order_id)
+          .run();
+      } else if (freeCode) {
+        await env.DB.prepare(
+          "UPDATE orders SET status = ?, unique_code = NULL, code_expires_at = '' WHERE order_id = ?"
+        )
+          .bind(status, order_id)
+          .run();
+      } else {
+        await env.DB.prepare("UPDATE orders SET status = ? WHERE order_id = ?")
+          .bind(status, order_id)
+          .run();
+      }
+      changed.push("status");
+    }
+  }
+
+  if (changed.length === 0) {
+    return new Response(JSON.stringify({ error: "tidak ada perubahan" }), { status: 400, headers: cors });
+  }
+
   // Order baru saja verified -> kirim email konfirmasi pembayaran (best-effort).
-  if (status === "verified" && before.status !== "verified") {
+  if (changed.includes("status") && status === "verified" && before.status !== "verified") {
     // Promo terpakai tepat sekali (transisi ke verified pertama kali).
     if (before.promo_code) {
       await env.DB.prepare("UPDATE promos SET used_count = used_count + 1 WHERE code = ?")
@@ -235,14 +270,15 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
       console.log(`[orders] email verified gagal: ${String(e).slice(0, 200)}`);
     }
   }
-  return Response.json({ ok: true, order_id, status }, { headers: cors });
+  return Response.json({ ok: true, order_id, changed }, { headers: cors });
 }
 
 // DELETE /api/orders?order_id=xxx — khusus admin (hapus order permanen).
 // Baris yang dihapus otomatis membebaskan kode uniknya.
 export async function onRequestDelete({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
-  if (!(await isAdmin(request, env))) {
+  const s = await getSession(request, env);
+  if (!s || !canDeleteOrder(s)) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
   const order_id = (new URL(request.url).searchParams.get("order_id") ?? "").slice(0, 64);

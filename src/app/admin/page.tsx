@@ -19,12 +19,37 @@ interface Order {
   unique_code: number | null;
   code_expires_at: string;
   promo_code: string;
+  onboard_done: number;
+  retensi_at: string;
+  renewal_count: number;
 }
+
+interface MeUser {
+  username: string;
+  name: string;
+  division: string;
+  is_admin: boolean;
+}
+
+const DIVISION_LABEL: Record<string, string> = {
+  marketing: "Marketing",
+  sales: "Sales",
+  support: "Support",
+  it: "IT",
+  ai_engineer: "AI Engineer",
+  retensi: "Retensi",
+  bisdev: "Bisdev",
+  admin: "Admin",
+};
 
 const FILTERS = [
   { key: "", label: "Semua" },
   { key: "payment_proof", label: "Perlu verifikasi" },
   { key: "verified", label: "Terverifikasi" },
+  { key: "setup_server", label: "Set up server" },
+  { key: "retensi", label: "Retensi" },
+  { key: "churn", label: "Churn" },
+  { key: "resubscribe", label: "Resubscribe" },
   { key: "checkout", label: "Belum bayar" },
   { key: "cancelled", label: "Batal" },
 ];
@@ -32,6 +57,10 @@ const FILTERS = [
 const STATUS_STYLE: Record<string, string> = {
   payment_proof: "bg-amber-100 text-amber-800",
   verified: "bg-teal-100 text-teal-800",
+  setup_server: "bg-blue-100 text-blue-800",
+  retensi: "bg-emerald-100 text-emerald-800",
+  churn: "bg-stone-300 text-stone-700",
+  resubscribe: "bg-violet-100 text-violet-800",
   checkout: "bg-stone-200 text-stone-600",
   cancelled: "bg-red-100 text-red-700",
 };
@@ -39,9 +68,41 @@ const STATUS_STYLE: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   payment_proof: "Perlu verifikasi",
   verified: "Terverifikasi",
+  setup_server: "Set up server",
+  retensi: "Retensi",
+  churn: "Churn",
+  resubscribe: "Resubscribe",
   checkout: "Belum bayar",
   cancelled: "Batal",
 };
+
+// Izin aksi di UI (server tetap menegakkan via matriks — ini hanya tampilan).
+function canVerify(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || me.division === "admin" || me.division === "sales");
+}
+function canStartSetup(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer"].includes(me.division));
+}
+function canFinishSetup(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || ["admin", "it", "ai_engineer"].includes(me.division));
+}
+function canOnboard(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer"].includes(me.division));
+}
+function canRetensiMove(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || ["admin", "retensi"].includes(me.division));
+}
+function canCancel(me: MeUser | null, status: string): boolean {
+  if (!me) return false;
+  if (me.is_admin || me.division === "admin") return true;
+  if (me.division === "sales" && (status === "checkout" || status === "payment_proof")) return true;
+  return false;
+}
+function expiryOf(o: Order): string {
+  if (!o.retensi_at) return "-";
+  const exp = new Date(new Date(o.retensi_at).getTime() + 30 * 864e5);
+  return exp.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+}
 
 interface ClientAccess {
   id: number;
@@ -56,7 +117,8 @@ interface ClientAccess {
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
-  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos">("orders");
+  const [me, setMe] = useState<MeUser | null>(null);
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -98,16 +160,18 @@ export default function AdminPage() {
 
   useEffect(() => {
     fetch("/api/auth")
-      .then((r) => {
-        if (!r.ok) router.replace("/login");
+      .then((r) => r.json().catch(() => null))
+      .then((data: { ok?: boolean; user?: MeUser } | null) => {
+        if (!data?.ok) router.replace("/login");
         else {
+          setMe(data.user ?? null);
           setAuth("ok");
           void load("");
           // Daftar akses klien (untuk panel kredensial per order).
           fetch("/api/clients")
             .then((r) => (r.ok ? r.json() : null))
-            .then((data: { clients?: ClientAccess[] } | null) => {
-              if (data?.clients) setClients(data.clients);
+            .then((cdata: { clients?: ClientAccess[] } | null) => {
+              if (cdata?.clients) setClients(cdata.clients);
             })
             .catch(() => {});
         }
@@ -121,6 +185,7 @@ export default function AdminPage() {
   }
 
   async function setStatus(order_id: string, status: string) {
+    setMenuFor(null);
     setUpdating(order_id);
     try {
       const res = await fetch("/api/orders", {
@@ -132,10 +197,53 @@ export default function AdminPage() {
         router.replace("/login");
         return;
       }
+      if (res.status === 403) {
+        setError("Aksi ini di luar wewenang divisimu.");
+        return;
+      }
       if (!res.ok) throw new Error("gagal");
-      setOrders((os) => os.map((o) => (o.order_id === order_id ? { ...o, status } : o)));
+      setOrders((os) =>
+        os.map((o) =>
+          o.order_id === order_id
+            ? {
+                ...o,
+                status,
+                renewal_count: status === "resubscribe" ? o.renewal_count + 1 : o.renewal_count,
+                retensi_at:
+                  status === "resubscribe" || (status === "retensi" && !o.retensi_at)
+                    ? new Date().toISOString()
+                    : o.retensi_at,
+              }
+            : o
+        )
+      );
     } catch {
       setError("Gagal update status.");
+    } finally {
+      setUpdating(null);
+    }
+  }
+
+  async function setOnboard(order_id: string, done: boolean) {
+    setUpdating(order_id);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id, onboard_done: done }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (res.status === 403) {
+        setError("Aksi ini di luar wewenang divisimu.");
+        return;
+      }
+      if (!res.ok) throw new Error("gagal");
+      setOrders((os) => os.map((o) => (o.order_id === order_id ? { ...o, onboard_done: done ? 1 : 0 } : o)));
+    } catch {
+      setError("Gagal update onboarding.");
     } finally {
       setUpdating(null);
     }
@@ -245,12 +353,27 @@ export default function AdminPage() {
     return <main className="mx-auto max-w-6xl px-4 py-20 text-center text-sm text-stone-500">Memeriksa sesi…</main>;
   }
 
+  const isAdmin = !!me && (me.is_admin || me.division === "admin");
+  const canLogs = !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer", "retensi", "bisdev"].includes(me.division));
+  const tabs = (["orders", "pricing", "logs", "promos", "users"] as const).filter((v) => {
+    if (v === "orders" || v === "logs") return v === "orders" ? true : canLogs;
+    return isAdmin;
+  });
+  const tabLabel = (v: string): string =>
+    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : "Staff";
+
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Malika · Internal</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">Dashboard Order</h1>
+          {me && (
+            <p className="mt-1 text-xs text-stone-500">
+              {me.name} · {DIVISION_LABEL[me.division] ?? me.division}
+              {me.is_admin ? " · Admin" : ""}
+            </p>
+          )}
         </div>
         <button
           onClick={logout}
@@ -261,7 +384,7 @@ export default function AdminPage() {
       </div>
 
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "pricing", "logs", "promos"] as const).map((v) => (
+        {tabs.map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -269,17 +392,19 @@ export default function AdminPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : "Kode Promo"}
+            {tabLabel(v)}
           </button>
         ))}
       </div>
 
-      {view === "pricing" ? (
+      {view === "pricing" && isAdmin ? (
         <PricingManager />
-      ) : view === "logs" ? (
+      ) : view === "logs" && canLogs ? (
         <PaymentLogs />
-      ) : view === "promos" ? (
+      ) : view === "promos" && isAdmin ? (
         <PromoManager />
+      ) : view === "users" && isAdmin ? (
+        <UsersManager meUsername={me?.username ?? ""} />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -387,6 +512,24 @@ export default function AdminPage() {
                     >
                       {STATUS_LABEL[o.status] ?? o.status}
                     </span>
+                    {(o.status === "verified" || o.status === "setup_server") && canOnboard(me) && (
+                      <button
+                        onClick={() => setOnboard(o.order_id, !o.onboard_done)}
+                        disabled={updating === o.order_id}
+                        title="Tandai onboarding selesai (berjalan paralel dengan setup)"
+                        className={`mt-1 block rounded-full px-2 py-0.5 text-[11px] font-semibold disabled:opacity-60 ${
+                          o.onboard_done ? "bg-teal-100 text-teal-800" : "bg-white/70 text-stone-500 ring-1 ring-white hover:bg-white"
+                        }`}
+                      >
+                        {o.onboard_done ? "✓ Onboard selesai" : "○ Onboard?"}
+                      </button>
+                    )}
+                    {(o.status === "retensi" || o.status === "resubscribe" || o.status === "churn") && (
+                      <p className="mt-1 text-[11px] text-stone-500">
+                        {o.renewal_count > 0 ? `Perpanjangan ke-${o.renewal_count} · ` : ""}
+                        {o.status === "churn" ? "berhenti" : `aktif s/d ${expiryOf(o)}`}
+                      </p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="relative">
@@ -404,31 +547,73 @@ export default function AdminPage() {
                             onClick={() => setMenuFor(null)}
                             className="fixed inset-0 z-10 cursor-default"
                           />
-                          <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-stone-200">
-                            {o.status === "payment_proof" && (
+                          <div className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-stone-200">
+                            {o.status === "payment_proof" && canVerify(me) && (
                               <button
                                 onClick={() => {
-                                  setMenuFor(null);
                                   void setStatus(o.order_id, "verified");
                                 }}
                                 disabled={updating === o.order_id}
                                 className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-60"
                               >
-                                {updating === o.order_id ? "…" : "✓ Verifikasi"}
+                                {updating === o.order_id ? "…" : "✓ Verifikasi pembayaran"}
                               </button>
                             )}
-                            {o.status === "verified" && (
-                              <button
-                                onClick={() => openCred(o)}
-                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-800 hover:bg-stone-100"
-                              >
-                                ✉ Kirim credential
-                              </button>
-                            )}
-                            {o.status !== "cancelled" && o.status !== "verified" && (
+                            {o.status === "verified" && canStartSetup(me) && (
                               <button
                                 onClick={() => {
-                                  setMenuFor(null);
+                                  void setStatus(o.order_id, "setup_server");
+                                }}
+                                disabled={updating === o.order_id}
+                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                              >
+                                🖥 Mulai set up server
+                              </button>
+                            )}
+                            {o.status === "setup_server" && canFinishSetup(me) && (
+                              <>
+                                <button
+                                  onClick={() => openCred(o)}
+                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-800 hover:bg-stone-100"
+                                >
+                                  ✉ Kirim credential
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    void setStatus(o.order_id, "retensi");
+                                  }}
+                                  disabled={updating === o.order_id}
+                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                >
+                                  ✓ Selesai → Retensi
+                                </button>
+                              </>
+                            )}
+                            {(o.status === "retensi" || o.status === "resubscribe") && canRetensiMove(me) && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    void setStatus(o.order_id, "resubscribe");
+                                  }}
+                                  disabled={updating === o.order_id}
+                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-60"
+                                >
+                                  ↻ Resubscribe (+1)
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    void setStatus(o.order_id, "churn");
+                                  }}
+                                  disabled={updating === o.order_id}
+                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-500 hover:bg-stone-100 disabled:opacity-60"
+                                >
+                                  ✕ Churn
+                                </button>
+                              </>
+                            )}
+                            {canCancel(me, o.status) && (
+                              <button
+                                onClick={() => {
                                   void setStatus(o.order_id, "cancelled");
                                 }}
                                 disabled={updating === o.order_id}
@@ -437,6 +622,7 @@ export default function AdminPage() {
                                 Batal
                               </button>
                             )}
+                            {isAdmin && (
                             <button
                               onClick={() => removeOrder(o.order_id)}
                               disabled={deleting === o.order_id}
@@ -444,6 +630,7 @@ export default function AdminPage() {
                             >
                               {deleting === o.order_id ? "…" : "Hapus"}
                             </button>
+                            )}
                           </div>
                         </>
                       )}
@@ -536,6 +723,196 @@ export default function AdminPage() {
         </>
       )}
     </main>
+  );
+}
+
+interface StaffUser {
+  id: number;
+  username: string;
+  name: string;
+  division: string;
+  is_admin: number;
+  active: number;
+  created_at: string;
+}
+
+const DIVISIONS = ["marketing", "sales", "support", "it", "ai_engineer", "retensi", "bisdev", "admin"];
+
+function UsersManager({ meUsername }: { meUsername: string }) {
+  const [users, setUsers] = useState<StaffUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [form, setForm] = useState({ username: "", password: "", name: "", division: "support", is_admin: false });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/users");
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { users?: StaffUser[] };
+      setUsers(data.users ?? []);
+    } catch {
+      setMsg("Gagal memuat staff.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setForm({ username: "", password: "", name: "", division: "support", is_admin: false });
+      setMsg("Akun staff dibuat. Beri tahu username + passwordnya secara aman.");
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleActive(u: StaffUser) {
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: u.id, active: !u.active }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal update.");
+    }
+  }
+
+  async function resetPass(u: StaffUser) {
+    const p = window.prompt(`Password baru untuk ${u.username} (min. 6 karakter):`);
+    if (!p) return;
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: u.id, password: p }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setMsg(`Password ${u.username} diperbarui.`);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal update.");
+    }
+  }
+
+  async function remove(id: number, username: string) {
+    if (!window.confirm(`Hapus akun ${username}?`)) return;
+    try {
+      const res = await fetch(`/api/users?id=${id}`, { method: "DELETE" });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setUsers((us) => us.filter((u) => u.id !== id));
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menghapus.");
+    }
+  }
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Tambah staff</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Username</span>
+            <input value={form.username} onChange={(e) => setForm((s) => ({ ...s, username: e.target.value }))} placeholder="cth. budi" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Password awal</span>
+            <input value={form.password} onChange={(e) => setForm((s) => ({ ...s, password: e.target.value }))} type="text" placeholder="min. 6 karakter" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Nama</span>
+            <input value={form.name} onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))} placeholder="cth. Budi Santoso" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Divisi</span>
+            <select value={form.division} onChange={(e) => setForm((s) => ({ ...s, division: e.target.value }))} className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400">
+              {DIVISIONS.map((d) => (
+                <option key={d} value={d}>{DIVISION_LABEL[d] ?? d}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-end gap-2 pb-2 text-xs font-semibold text-stone-600">
+            <input type="checkbox" checked={form.is_admin} onChange={(e) => setForm((s) => ({ ...s, is_admin: e.target.checked }))} className="h-4 w-4 accent-teal-600" />
+            Jadikan admin (akses penuh)
+          </label>
+        </div>
+        <button type="submit" disabled={saving} className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+          {saving ? "Menyimpan…" : "Buat akun"}
+        </button>
+      </form>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat staff…</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">User</th>
+                <th className="px-4 py-3 font-semibold">Divisi</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3">
+                    <p className="font-semibold">{u.name} {u.username === meUsername && <span className="text-[11px] text-stone-400">(kamu)</span>}</p>
+                    <p className="font-mono text-[11px] text-stone-400">@{u.username}{u.is_admin ? " · admin" : ""}</p>
+                  </td>
+                  <td className="px-4 py-3 text-xs">{DIVISION_LABEL[u.division] ?? u.division}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${u.active ? "bg-teal-100 text-teal-800" : "bg-stone-200 text-stone-500"}`}>
+                      {u.active ? "Aktif" : "Nonaktif"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      <button onClick={() => toggleActive(u)} disabled={u.username === meUsername} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white disabled:opacity-40">
+                        {u.active ? "Nonaktifkan" : "Aktifkan"}
+                      </button>
+                      <button onClick={() => resetPass(u)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
+                        Reset password
+                      </button>
+                      <button onClick={() => remove(u.id, u.username)} disabled={u.username === meUsername} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600 disabled:opacity-40">
+                        Hapus
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }
 

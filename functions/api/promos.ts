@@ -6,6 +6,13 @@
    - DELETE ?code=XXX khusus admin — hapus promo
 */
 
+import {
+  canManageCatalog,
+  cors,
+  getSession,
+  type EnvBase,
+} from "./_auth";
+
 interface D1Prepared {
   bind(...values: unknown[]): D1Prepared;
   first<T = Record<string, unknown>>(): Promise<T | null>;
@@ -15,49 +22,11 @@ interface D1Prepared {
 interface D1Database {
   prepare(query: string): D1Prepared;
 }
-interface Env {
+interface Env extends EnvBase {
   DB: D1Database;
   SESSION_SECRET?: string;
 }
 
-async function hmacHex(secret: string, msg: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let d = 0;
-  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return d === 0;
-}
-
-async function isAdmin(req: Request, env: Env): Promise<boolean> {
-  const secret = env.SESSION_SECRET ?? "";
-  if (!secret) return false;
-  const m = (req.headers.get("cookie") ?? "").match(/(?:^|;\s*)malika_admin=([^;]+)/);
-  if (!m) return false;
-  const parts = decodeURIComponent(m[1]).split(".");
-  if (parts.length !== 3) return false;
-  const [expHex, rand, sig] = parts;
-  const exp = parseInt(expHex, 16);
-  if (!Number.isFinite(exp) || exp < Date.now() / 1000) return false;
-  if (!/^[0-9a-f]{32}$/.test(rand)) return false;
-  return timingSafeEqual(await hmacHex(secret, `${expHex}.${rand}`), sig.toLowerCase());
-}
-
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
 
 interface PromoRow {
   code: string;
@@ -91,8 +60,10 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const code = normCode(new URL(request.url).searchParams.get("code"));
   if (!code) {
-    if (!(await isAdmin(request, env))) {
+    { const sess = await getSession(request, env);
+  if (!sess || !canManageCatalog(sess)) {
       return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  }
     }
     const { results } = await env.DB.prepare(
       "SELECT code, type, value, max_uses, used_count, active, expires_at, created_at FROM promos ORDER BY created_at DESC LIMIT 200"
@@ -123,8 +94,10 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
 // POST /api/promos {code, type, value, max_uses?, expires_at?, active?} — admin (buat/update).
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
-  if (!(await isAdmin(request, env))) {
+  { const sess = await getSession(request, env);
+  if (!sess || !canManageCatalog(sess)) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  }
   }
   let b: {
     code?: unknown;
@@ -165,8 +138,10 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
 // DELETE /api/promos?code=XXX — khusus admin.
 export async function onRequestDelete({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
-  if (!(await isAdmin(request, env))) {
+  { const sess = await getSession(request, env);
+  if (!sess || !canManageCatalog(sess)) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  }
   }
   const code = normCode(new URL(request.url).searchParams.get("code"));
   if (!code) return new Response(JSON.stringify({ error: "code required" }), { status: 400, headers: cors });

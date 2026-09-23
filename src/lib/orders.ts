@@ -50,7 +50,7 @@ export function calcDiscount(p: PromoCheck, base: number): number {
 }
 
 /* Nomor WhatsApp admin untuk konfirmasi transfer (sama dengan di Footer). */
-export const ADMIN_WA = "6282211114681";
+export const ADMIN_WA = "6285124317811";
 
 export function buildTransferWaLink(o: {
   order_id: string;

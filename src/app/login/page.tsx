@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [passcode, setPasscode] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -22,8 +23,8 @@ export default function LoginPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!passcode) {
-      setError("Isi passcode dulu ya.");
+    if (!username.trim() || !password) {
+      setError("Isi username dan password dulu ya.");
       return;
     }
     setLoading(true);
@@ -32,14 +33,14 @@ export default function LoginPage() {
       const res = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passcode }),
+        body: JSON.stringify({ username: username.trim(), password }),
       });
       if (res.ok) {
         router.replace("/admin");
       } else if (res.status === 429) {
         setError("Terlalu banyak percobaan. Coba lagi nanti.");
       } else {
-        setError("Passcode salah.");
+        setError("Username atau password salah.");
       }
     } catch {
       setError("Tidak bisa menghubungi server. Coba lagi.");
@@ -56,15 +57,26 @@ export default function LoginPage() {
     <main className="mx-auto w-full max-w-sm px-4 py-20 sm:px-6">
       <div className="glass-strong feed-in rounded-3xl p-7">
         <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Malika · Internal</p>
-        <h1 className="mt-1 text-2xl font-bold tracking-tight">Login Admin</h1>
-        <p className="mt-1 text-sm text-stone-500">Masuk untuk membuka dashboard order.</p>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight">Login Staff</h1>
+        <p className="mt-1 text-sm text-stone-500">Masuk dengan username dan password divisimu.</p>
         <form onSubmit={submit} className="mt-5 space-y-3">
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-stone-500">Passcode</span>
+            <span className="mb-1 block text-xs font-medium text-stone-500">Username</span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="cth. kazhim"
+              autoComplete="username"
+              className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2.5 text-sm outline-none focus:border-teal-400"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Password</span>
             <input
               type="password"
-              value={passcode}
-              onChange={(e) => setPasscode(e.target.value)}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               autoComplete="current-password"
               className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2.5 text-sm outline-none focus:border-teal-400"
