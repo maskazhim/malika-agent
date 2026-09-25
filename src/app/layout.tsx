@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Malika Agent — AI Teammate yang Punya Komputer Sendiri",
+  title: "AI Agent yang bekerja layaknya manusia",
   description:
     "Agent AI yang kerja 24/7 di server untuk bisnis Indonesia: rekrutmen JobStreet, keuangan Jurnal.id, Instagram, LinkedIn, Google Maps. Tanpa laptop kamu nyala.",
   icons: {

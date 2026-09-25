@@ -9,7 +9,7 @@ export default function Hero() {
         <h1 className="text-4xl font-semibold leading-[1.15] tracking-tight text-stone-950 sm:text-6xl">
           AI AGENT YANG BEKERJA
           <br />
-          <span className="malika-gradient-text">SEPERTI MANUSIA.</span>
+          <span className="malika-gradient-text">LAYAKNYA MANUSIA.</span>
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-stone-600 sm:text-lg">
           Kasih instruksi sekali — agent yang buka aplikasi, klik, ketik, dan selesaikan
