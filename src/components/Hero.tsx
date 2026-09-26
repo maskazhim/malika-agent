@@ -34,9 +34,18 @@ export default function Hero() {
           Agent sedang bekerja 24/7 — bahkan saat kamu tidur
         </p>
         <h1 className="text-4xl font-semibold leading-[1.15] tracking-tight text-stone-950 sm:text-6xl">
-          AI AGENT YANG BEKERJA
-          <br />
-          <span className="malika-gradient-text">LAYAKNYA MANUSIA.</span>
+          <span className="sm:hidden">
+            AI AGENT YANG
+            <br />
+            KERJA <span className="malika-gradient-text">LAYAKNYA</span>
+            <br />
+            <span className="malika-gradient-text">MANUSIA.</span>
+          </span>
+          <span className="hidden sm:inline">
+            AI AGENT YANG KERJA
+            <br />
+            <span className="malika-gradient-text">LAYAKNYA MANUSIA.</span>
+          </span>
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-stone-600 sm:text-lg">
           AI Agent yang kerjain kerjaan manusia, tanpa drama. Seperti punya karyawan
