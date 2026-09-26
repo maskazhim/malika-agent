@@ -195,7 +195,7 @@ export default function Pricing() {
 
   return (
     <section id="harga" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-12 sm:px-6">
-      <h2 className="text-center text-3xl font-semibold tracking-tight sm:text-4xl">Paket Harga</h2>
+      <h2 className="text-center text-3xl font-semibold tracking-tight sm:text-4xl">Gaji ¼ UMR, Kerjanya 24/7 Non-Stop</h2>
       <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-stone-600 sm:text-base">
         Pakai Malika Agent berasa nambah karyawan, bukan nambah software.
       </p>

@@ -459,7 +459,7 @@ export const PRICING = [
     name: "Growth",
     price: "Rp4.599.000",
     period: "/bulan",
-    desc: "Setara 6 karyawan manusia bekerja 24/7 nonstop — cuma ¼ UMR Jakarta.",
+    desc: "Setara 6 karyawan kerja 24/7 — cuma ¼ UMR Jakarta.",
     features: [
       "Kuota penggunaan AI 3× lebih besar dari Starter",
       "3 user",
@@ -478,7 +478,7 @@ export const PRICING = [
     name: "Scale",
     price: "Rp10.999.000",
     period: "/bulan",
-    desc: "Setara 12 karyawan manusia bekerja 24/7 nonstop — cuma ¼ UMR Jakarta.",
+    desc: "Setara 12 karyawan kerja 24/7 — cuma ¼ UMR Jakarta.",
     features: [
       "Kuota penggunaan AI 9× lebih besar dari Starter",
       "6 user",
