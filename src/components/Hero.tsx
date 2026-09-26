@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 const SLIDES = [
   { src: "/deck-1.png", alt: "Malika Agent — deck 1" },
@@ -69,11 +69,11 @@ export default function Hero() {
       >
         <div className="overflow-hidden">
           <div
-            className="-mx-2 flex transition-transform duration-700"
-            style={{ transform: `translateX(-${index * 50}%)` }}
+            className="-mx-2 flex transition-transform duration-700 [transform:translateX(calc(var(--i)*-100%))] sm:[transform:translateX(calc(var(--i)*-50%))]"
+            style={{ "--i": index } as CSSProperties}
           >
             {[...SLIDES, SLIDES[0]].map((s, i) => (
-              <div key={`${s.src}-${i}`} className="w-1/2 shrink-0 px-2">
+              <div key={`${s.src}-${i}`} className="w-full shrink-0 px-2 sm:w-1/2">
                 <div className="aspect-[640/303] w-full overflow-hidden rounded-2xl">
                   <img
                     src={s.src}
