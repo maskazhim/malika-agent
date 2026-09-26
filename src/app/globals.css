@@ -157,3 +157,22 @@ body {
   background-clip: text;
   color: transparent;
 }
+
+/* bubble "Tanya Malika?" di atas ikon livechat */
+@keyframes bubble-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+.bubble-float {
+  animation: bubble-float 2.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bubble-float {
+    animation: none;
+  }
+}

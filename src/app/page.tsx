@@ -7,6 +7,7 @@ import { UspGrid, UseCaseGrid } from "@/components/Grids";
 import Pricing from "@/components/Pricing";
 import Faq from "@/components/Faq";
 import Footer from "@/components/Footer";
+import ChatBubble from "@/components/ChatBubble";
 
 export default function Home() {
   return (
@@ -49,6 +50,7 @@ export default function Home() {
         </section>
       </main>
       <Footer />
+      <ChatBubble />
       <Script id="aksoro-livechat" strategy="lazyOnload">
         {`!function(c,h,a,t,s){c.mychat=c.mychat||{server:"https://live.aksoro.co.id",iframeWidth:"400px",iframeHeight:"700px",offsetX:"24px",offsetY:"24px",accessKey:"Malika-HzgiIBv4"};var q=[];c.ChatAI=function(){q.push(arguments)};c.ChatAI.q=q;t=h.createElement(a);s=h.getElementsByTagName(a)[0];t.async=1;t.src=c.mychat.server+"/widget.js";s.parentNode.insertBefore(t,s)}(window,document,"script");`}
       </Script>
