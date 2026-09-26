@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 
 const SLIDES = [
-  { src: "/deck-1.png", alt: "Malika Agent — deck 1" },
-  { src: "/deck-3.png", alt: "Malika Agent — deck 2" },
-  { src: "/deck-2.png", alt: "Malika Agent — deck 3" },
+  { src: "/deck-1.webp", alt: "Malika Agent — deck 1" },
+  { src: "/deck-3.webp", alt: "Malika Agent — deck 2" },
+  { src: "/deck-2.webp", alt: "Malika Agent — deck 3" },
 ];
 
 const AUTOPLAY_MS = 4500;

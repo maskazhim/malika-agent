@@ -298,7 +298,7 @@ function IgReport({ onAsk }: { onAsk: (t: string) => void }) {
       </div>
       <div className="px-3.5 pb-3.5">
         <div className="mt-1 flex gap-2 rounded-xl bg-white p-2 ring-1 ring-stone-200/70">
-          <img src="/ig-post.png" alt="Top post" className="h-14 w-14 rounded-lg object-cover" />
+          <img src="/ig-post.webp" alt="Top post" className="h-14 w-14 rounded-lg object-cover" />
           <div className="text-[12px]">
             <p className="font-bold">🏆 Top post: “Teman Saya Mecat 80%…”</p>
             <p className="text-stone-500">1,1K likes · 210 comments · 98 shares</p>
@@ -373,6 +373,9 @@ export default function MalikaSimulator() {
   const [toast, setToast] = useState<string | null>(null);
   const [steps, setSteps] = useState(INITIAL_STEPS);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Navigasi khusus mobile: daftar agent → chat utama → layar komputer (data + routines).
+  // Desktop selalu tampil 3 kolom, jadi state ini hanya dipakai di bawah breakpoint md.
+  const [mobileView, setMobileView] = useState<"list" | "chat" | "computer">("list");
 
   useEffect(() => {
     setName(AGENT_NAME[active]);
@@ -402,6 +405,12 @@ export default function MalikaSimulator() {
 
   function pushMsg(key: AgentKey, msg: ChatMsg) {
     setChats((c) => ({ ...c, [key]: [...c[key], msg] }));
+  }
+
+  // Pilih agent dari daftar (mobile: sekaligus masuk ke halaman chat utama).
+  function pickAgent(key: AgentKey) {
+    setActive(key);
+    setMobileView("chat");
   }
 
   function replyFor(key: AgentKey, text: string): { text?: string; report?: ChatMsg["report"] } {
@@ -480,9 +489,13 @@ export default function MalikaSimulator() {
       </div>
 
       <div className="thin-scroll overflow-x-auto">
-        <div className="flex h-[680px] min-w-[1024px]">
-          {/* KIRI */}
-          <aside className="flex w-[262px] shrink-0 flex-col border-r border-white/60 bg-white/40">
+        <div className="flex h-[620px] sm:h-[660px] md:h-[680px] md:min-w-[1024px]">
+          {/* KIRI — daftar agent. Mobile: halaman default, collapse via tombol kembali di chat. */}
+          <aside
+            className={`${
+              mobileView === "list" ? "flex" : "hidden"
+            } w-full shrink-0 flex-col border-white/60 bg-white/40 md:flex md:w-[262px] md:border-r`}
+          >
             <div className="flex items-center gap-1.5 p-3">
               <div className="flex flex-1 items-center gap-2 rounded-lg bg-white/80 px-2.5 py-1.5 text-[13px] text-stone-500 ring-1 ring-white">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -497,7 +510,7 @@ export default function MalikaSimulator() {
               {filtered.map((k) => (
                 <button
                   key={k}
-                  onClick={() => setActive(k)}
+                  onClick={() => pickAgent(k)}
                   className={`mb-1 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition ${
                     active === k ? "bg-white/90 shadow-sm ring-1 ring-white" : "hover:bg-white/60"
                   }`}
@@ -527,20 +540,46 @@ export default function MalikaSimulator() {
             </div>
           </aside>
 
-          {/* TENGAH */}
-          <main className="flex min-w-0 flex-1 flex-col bg-white/30">
-            <div className="relative flex items-center border-b border-white/60 px-4 py-2.5">
-              <Avatar k={active} size={22} />
+          {/* TENGAH — chat utama. Mobile: tampil setelah pilih agent. */}
+          <main
+            className={`${
+              mobileView === "chat" ? "flex" : "hidden"
+            } min-w-0 flex-1 flex-col bg-white/30 md:flex`}
+          >
+            <div className="relative flex items-center border-b border-white/60 px-3 py-2.5 sm:px-4">
+              <button
+                onClick={() => setMobileView("list")}
+                aria-label="Kembali ke daftar agent"
+                className="mr-1 rounded-md px-2 py-1.5 text-sm font-semibold text-stone-500 hover:bg-white/70 md:hidden"
+              >
+                ‹
+              </button>
+              <button
+                onClick={() => setMobileView("list")}
+                aria-label="Kembali ke daftar agent"
+                title="Daftar agent"
+                className="rounded-full hover:ring-2 hover:ring-teal-200 md:cursor-default md:hover:ring-0"
+              >
+                <Avatar k={active} size={22} />
+              </button>
               <p className="absolute left-1/2 -translate-x-1/2 text-[13px] font-semibold">
                 {AGENT_NAME[active]} <span className="font-normal text-stone-400">· {AGENT_STYLE[active].role}</span>
               </p>
               <div className="ml-auto flex items-center gap-1 text-stone-400">
-                <button className="rounded-md p-1.5 hover:bg-white/70" title="History">◫</button>
-                <button onClick={() => setRightMode(rightMode === "running" ? "settings" : "running")} className="rounded-md p-1.5 hover:bg-white/70" title="Toggle panel">◐</button>
+                <button
+                  onClick={() => setMobileView("computer")}
+                  aria-label="Buka layar komputer agent"
+                  title="Layar komputer"
+                  className="rounded-md px-2 py-1.5 text-sm hover:bg-white/70 md:hidden"
+                >
+                  🖥️
+                </button>
+                <button className="hidden rounded-md p-1.5 hover:bg-white/70 md:block" title="History">◫</button>
+                <button onClick={() => setRightMode(rightMode === "running" ? "settings" : "running")} className="hidden rounded-md p-1.5 hover:bg-white/70 md:block" title="Toggle panel">◐</button>
               </div>
             </div>
 
-            <div ref={scrollRef} className="thin-scroll flex-1 space-y-2.5 overflow-y-auto px-6 py-5">
+            <div ref={scrollRef} className="thin-scroll flex-1 space-y-2.5 overflow-y-auto px-3 py-5 sm:px-6">
               {chat.length === 0 && (
                 <p className="mx-auto mt-20 max-w-[260px] text-center text-[13px] text-stone-400">
                   Percakapan dikosongkan. Ketik pesan di bawah untuk mulai simulasi baru.
@@ -608,15 +647,26 @@ export default function MalikaSimulator() {
             </div>
           </main>
 
-          {/* KANAN */}
-          <aside className="flex w-[302px] shrink-0 flex-col border-l border-white/60 bg-white/40">
+          {/* KANAN — layar komputer (data + routines). Mobile: halaman sendiri via tombol 🖥️. */}
+          <aside
+            className={`${
+              mobileView === "computer" ? "flex" : "hidden"
+            } w-full shrink-0 flex-col border-white/60 bg-white/40 md:flex md:w-[302px] md:border-l`}
+          >
             {rightMode === "settings" ? (
               <div className="thin-scroll flex-1 overflow-y-auto">
-                <div className="flex items-center px-4 py-2.5">
+                <div className="flex items-center px-3 py-2.5 sm:px-4">
+                  <button
+                    onClick={() => setMobileView("chat")}
+                    aria-label="Kembali ke chat"
+                    className="mr-1 rounded-md px-2 py-1.5 text-sm font-semibold text-stone-500 hover:bg-white/70 md:hidden"
+                  >
+                    ‹
+                  </button>
                   <p className="text-[13px] font-medium text-stone-500">Settings</p>
                   <div className="ml-auto flex gap-1 text-stone-400">
                     <button onClick={() => setRightMode("running")} className="rounded-md p-1.5 hover:bg-white/70" title="Lihat layar">◫</button>
-                    <button className="rounded-md p-1.5 hover:bg-white/70">✕</button>
+                    <button onClick={() => setMobileView("chat")} className="rounded-md p-1.5 hover:bg-white/70" title="Tutup" aria-label="Kembali ke chat">✕</button>
                   </div>
                 </div>
                 <div className="flex justify-center py-2">
@@ -664,13 +714,20 @@ export default function MalikaSimulator() {
               </div>
             ) : (
               <div className="thin-scroll flex flex-1 flex-col overflow-y-auto">
-                <div className="flex items-center px-4 py-2.5">
+                <div className="flex items-center px-3 py-2.5 sm:px-4">
+                  <button
+                    onClick={() => setMobileView("chat")}
+                    aria-label="Kembali ke chat"
+                    className="mr-1 rounded-md px-2 py-1.5 text-sm font-semibold text-stone-500 hover:bg-white/70 md:hidden"
+                  >
+                    ‹
+                  </button>
                   <p className="flex items-center gap-1.5 text-[13px] font-medium text-stone-500">
                     <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" /> running
                   </p>
                   <div className="ml-auto flex gap-1 text-stone-400">
                     <button onClick={() => setRightMode("settings")} className="rounded-md p-1.5 hover:bg-white/70" title="Settings">⚙</button>
-                    <button className="rounded-md p-1.5 hover:bg-white/70">✕</button>
+                    <button onClick={() => setMobileView("chat")} className="rounded-md p-1.5 hover:bg-white/70" title="Tutup" aria-label="Kembali ke chat">✕</button>
                   </div>
                 </div>
                 <div className="px-3">
@@ -686,7 +743,7 @@ export default function MalikaSimulator() {
                         </span>
                         <span className="w-6" />
                       </div>
-                      <img src="/ig-post.png" alt="Instagram — performa postingan" className="w-full object-cover" />
+                      <img src="/ig-post.webp" alt="Instagram — performa postingan" className="w-full object-cover" />
                     </div>
                   ) : active === "kazhim" ? (
                     <div className="overflow-hidden rounded-xl bg-white/80 ring-1 ring-white">

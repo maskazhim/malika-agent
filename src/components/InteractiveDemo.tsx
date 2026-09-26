@@ -24,9 +24,10 @@ export default function InteractiveDemo() {
       </div>
 
       <div className="mx-auto mt-4 grid max-w-6xl gap-2 text-center text-xs text-stone-500 sm:grid-cols-3">
-        <p>← Kiri: search, badge <strong>running</strong>, 3 bot Malika + Joko</p>
-        <p>Tengah: chat + kartu laporan (tabel, insight, tombol aksi)</p>
-        <p>Kanan: Settings ↔ Running (live screen tiap agent)</p>
+        <p className="md:hidden">Pilih agent → chat → tombol 🖥️ buat intip layar komputer & routines</p>
+        <p className="hidden md:block">← Kiri: search, badge <strong>running</strong>, 3 bot Malika + Joko</p>
+        <p className="hidden md:block">Tengah: chat + kartu laporan (tabel, insight, tombol aksi)</p>
+        <p className="hidden md:block">Kanan: Settings ↔ Running (live screen tiap agent)</p>
       </div>
     </section>
   );

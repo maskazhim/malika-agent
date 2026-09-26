@@ -1,19 +1,19 @@
 const KARYAWAN_CARDS = [
-  { src: "/karyawan-1.png", alt: "01 — Instruksi kayak chat ke manusia" },
-  { src: "/karyawan-2.png", alt: "02 — Tambah agent, semudah klik tombol" },
-  { src: "/karyawan-3.png", alt: "03 — Kerja sendiri sesuai jadwal" },
-  { src: "/karyawan-4.png", alt: "04 — Punya komputer dan browser sendiri" },
-  { src: "/karyawan-5.png", alt: "05 — Otak yang bisa disetel per agent" },
-  { src: "/karyawan-6.png", alt: "06 — Pakai langganan yang sudah kamu punya" },
+  { src: "/karyawan-1.webp", alt: "01 — Instruksi kayak chat ke manusia" },
+  { src: "/karyawan-2.webp", alt: "02 — Tambah agent, semudah klik tombol" },
+  { src: "/karyawan-3.webp", alt: "03 — Kerja sendiri sesuai jadwal" },
+  { src: "/karyawan-4.webp", alt: "04 — Punya komputer dan browser sendiri" },
+  { src: "/karyawan-5.webp", alt: "05 — Otak yang bisa disetel per agent" },
+  { src: "/karyawan-6.webp", alt: "06 — Pakai langganan yang sudah kamu punya" },
 ];
 
 const PEKERJAAN_CARDS = [
-  { src: "/pekerjaan-1a.png", alt: "Rekrutmen — screening CV otomatis via JobStreet" },
-  { src: "/pekerjaan-2a.png", alt: "Keuangan — laporan laba-rugi via Jurnal.id" },
-  { src: "/pekerjaan-3a.png", alt: "Riset & Posting Sosmed via Instagram" },
-  { src: "/pekerjaan-4a.png", alt: "Prospecting B2B via LinkedIn" },
-  { src: "/pekerjaan-5a.png", alt: "Riset Lokasi & Bisnis via Google Maps" },
-  { src: "/pekerjaan-6a.png", alt: "Akuntansi Accurate" },
+  { src: "/pekerjaan-1a.webp", alt: "Rekrutmen — screening CV otomatis via JobStreet" },
+  { src: "/pekerjaan-2a.webp", alt: "Keuangan — laporan laba-rugi via Jurnal.id" },
+  { src: "/pekerjaan-3a.webp", alt: "Riset & Posting Sosmed via Instagram" },
+  { src: "/pekerjaan-4a.webp", alt: "Prospecting B2B via LinkedIn" },
+  { src: "/pekerjaan-5a.webp", alt: "Riset Lokasi & Bisnis via Google Maps" },
+  { src: "/pekerjaan-6a.webp", alt: "Akuntansi Accurate" },
 ];
 
 export function UspGrid() {
