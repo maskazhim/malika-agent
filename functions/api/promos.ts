@@ -86,7 +86,16 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     return new Response(JSON.stringify({ ok: false, error: "Kuota kode promo sudah habis." }), { status: 410, headers: cors });
   }
   return Response.json(
-    { ok: true, code: row.code, type: row.type, value: row.value },
+    {
+      ok: true,
+      code: row.code,
+      type: row.type,
+      value: row.value,
+      expires_at: row.expires_at ?? "",
+      max_uses: row.max_uses ?? 0,
+      used_count: row.used_count ?? 0,
+      remaining: row.max_uses > 0 ? Math.max(0, row.max_uses - row.used_count) : null,
+    },
     { headers: cors }
   );
 }

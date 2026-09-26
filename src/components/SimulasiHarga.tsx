@@ -15,6 +15,8 @@ interface Plan {
   key: string;
   name: string;
   priceInt: number;
+  desc: string;
+  features: string[];
 }
 
 function fallbackPlans(): Plan[] {
@@ -22,7 +24,16 @@ function fallbackPlans(): Plan[] {
     key: p.name.toLowerCase(),
     name: p.name,
     priceInt: FALLBACK_AMOUNTS[p.name] ?? 0,
+    desc: p.desc,
+    features: p.features,
   }));
+}
+
+function formatExpiry(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
 export default function SimulasiHarga() {
@@ -38,16 +49,30 @@ export default function SimulasiHarga() {
   useEffect(() => {
     fetch("/api/pricing")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { plans?: { key: unknown; name: unknown; price: unknown }[] } | null) => {
-        if (!data?.plans || data.plans.length === 0) return;
-        setPlans(
-          data.plans.map((p) => ({
-            key: String(p.key),
-            name: String(p.name),
-            priceInt: Math.round(Number(p.price ?? 0)) || 0,
-          }))
-        );
-      })
+      .then(
+        (
+          data: {
+            plans?: {
+              key: unknown;
+              name: unknown;
+              price: unknown;
+              description?: unknown;
+              features?: unknown;
+            }[];
+          } | null
+        ) => {
+          if (!data?.plans || data.plans.length === 0) return;
+          setPlans(
+            data.plans.map((p) => ({
+              key: String(p.key),
+              name: String(p.name),
+              priceInt: Math.round(Number(p.price ?? 0)) || 0,
+              desc: String(p.description ?? ""),
+              features: Array.isArray(p.features) ? p.features.map(String) : [],
+            }))
+          );
+        }
+      )
       .catch(() => {});
   }, []);
 
@@ -70,7 +95,17 @@ export default function SimulasiHarga() {
         setPromo(null);
         setPromoMsg(data?.error ?? "Kode promo tidak valid.");
       } else {
-        setPromo({ code: String(data.code), type: String(data.type), value: Number(data.value) });
+        setPromo({
+          code: String(data.code),
+          type: String(data.type),
+          value: Number(data.value),
+          expires_at: String(data.expires_at ?? ""),
+          max_uses: Number(data.max_uses ?? 0),
+          used_count: Number(data.used_count ?? 0),
+          remaining:
+            data.remaining === null || data.remaining === undefined ? null : Number(data.remaining),
+        });
+        setPromoMsg(null);
       }
     } catch {
       setPromo(null);
@@ -91,20 +126,50 @@ export default function SimulasiHarga() {
       <div className="glass-strong rounded-3xl p-6">
         <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Input simulasi</p>
 
-        <label className="mt-4 block">
-          <span className="mb-1 block text-xs font-medium text-stone-500">Paket</span>
-          <select
-            value={plan?.key ?? ""}
-            onChange={(e) => setPlanKey(e.target.value)}
-            className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
-          >
-            {plans.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.name} · {formatRp(p.priceInt)}/bulan
-              </option>
-            ))}
-          </select>
-        </label>
+        <span className="mb-1 mt-4 block text-xs font-medium text-stone-500">Paket</span>
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/50 p-1" role="tablist" aria-label="Pilih paket">
+          {plans.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPlanKey(p.key)}
+              role="tab"
+              aria-selected={plan?.key === p.key}
+              className={`rounded-lg px-2 py-2 text-center transition ${
+                plan?.key === p.key
+                  ? "malika-gradient text-white shadow"
+                  : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
+              }`}
+            >
+              <span className="block text-sm font-semibold">{p.name}</span>
+              <span
+                className={`block text-[11px] font-normal ${
+                  plan?.key === p.key ? "text-white/80" : "text-stone-400"
+                }`}
+              >
+                {formatRp(p.priceInt)}/bln
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {plan && (
+          <div className="mt-2 rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+            <p className="text-sm font-semibold text-stone-900">
+              {plan.name} · {formatRp(plan.priceInt)}/bulan
+            </p>
+            {plan.desc && <p className="mt-0.5 text-xs text-stone-500">{plan.desc}</p>}
+            {plan.features.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs text-stone-600">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex gap-1.5">
+                    <span className="text-teal-600">✓</span>
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <span className="mb-1 mt-4 block text-xs font-medium text-stone-500">Masa langganan</span>
         <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/50 p-1">
@@ -123,36 +188,52 @@ export default function SimulasiHarga() {
 
         <span className="mb-1 mt-4 block text-xs font-medium text-stone-500">Kode promo (opsional)</span>
         {promo ? (
-          <div className="flex items-center justify-between gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-white">
-            <p className="text-sm">
-              <span className="font-bold text-teal-700">{promo.code}</span>
-              <span className="text-stone-500">
-                {" "}
-                · {promo.type === "fixed" ? `potongan ${formatRp(promo.value)}` : `${promo.value}%`}
-              </span>
-            </p>
-            <button onClick={resetPromo} className="text-xs font-semibold text-stone-400 hover:text-red-600">
-              Hapus
-            </button>
+          <div>
+            <div className="flex items-center justify-between gap-2 rounded-xl bg-white/60 px-3 py-2 ring-1 ring-white">
+              <p className="text-sm">
+                <span className="font-bold text-teal-700">{promo.code}</span>
+                <span className="text-stone-500">
+                  {" "}
+                  · {promo.type === "fixed" ? `potongan ${formatRp(promo.value)}` : `${promo.value}%`}
+                </span>
+              </p>
+              <button onClick={resetPromo} className="text-xs font-semibold text-stone-400 hover:text-red-600">
+                Hapus
+              </button>
+            </div>
+            {(promo.expires_at || (promo.max_uses ?? 0) > 0) && (
+              <p className="mt-1 text-[11px] leading-relaxed text-stone-500">
+                {promo.expires_at && <>Berlaku sampai {formatExpiry(promo.expires_at)}.</>}
+                {promo.expires_at && (promo.max_uses ?? 0) > 0 && " "}
+                {(promo.max_uses ?? 0) > 0 && (
+                  <>Sisa kuota {promo.remaining ?? Math.max(0, (promo.max_uses ?? 0) - (promo.used_count ?? 0))} dari {promo.max_uses}.</>
+                )}
+              </p>
+            )}
           </div>
         ) : (
-          <div className="flex gap-2">
-            <input
-              value={promoInput}
-              onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") applyPromo();
-              }}
-              placeholder="cth. HEMAT20"
-              className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400"
-            />
-            <button
-              onClick={applyPromo}
-              disabled={checking || !promoInput.trim()}
-              className="shrink-0 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-stone-700 disabled:opacity-50"
-            >
-              {checking ? "…" : "Cek"}
-            </button>
+          <div>
+            <div className="flex gap-2">
+              <input
+                value={promoInput}
+                onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyPromo();
+                }}
+                placeholder="cth. HEMAT20"
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400"
+              />
+              <button
+                onClick={applyPromo}
+                disabled={checking || !promoInput.trim()}
+                className="shrink-0 rounded-xl bg-stone-900 px-4 py-2 text-xs font-semibold text-white hover:bg-stone-700 disabled:opacity-50"
+              >
+                {checking ? "…" : "Cek"}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-stone-400">
+              Kode voucher mungkin memiliki masa berlaku atau maksimal penggunaan per customer.
+            </p>
           </div>
         )}
         {promoMsg && <p className="mt-1 text-xs text-red-600">{promoMsg}</p>}
@@ -236,9 +317,6 @@ export default function SimulasiHarga() {
             </tbody>
           </table>
         </div>
-        <p className="mt-3 text-xs leading-relaxed text-stone-400">
-          Kode voucher mungkin memiliki masa berlaku atau maksimal penggunaan per customer.
-        </p>
       </div>
     </div>
   );

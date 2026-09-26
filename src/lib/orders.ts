@@ -26,6 +26,10 @@ export interface PromoCheck {
   code: string;
   type: string;
   value: number;
+  expires_at?: string;
+  max_uses?: number;
+  used_count?: number;
+  remaining?: number | null;
 }
 
 /* Validasi kode promo ke server. Return null bila tidak valid / API gagal. */
@@ -36,7 +40,15 @@ export async function checkPromo(code: string): Promise<PromoCheck | null> {
     const res = await fetch(`/api/promos?code=${encodeURIComponent(c)}`);
     const data = (await res.json()) as Partial<PromoCheck> & { ok?: boolean };
     if (!res.ok || !data.ok) return null;
-    return { code: String(data.code), type: String(data.type), value: Number(data.value) };
+    return {
+      code: String(data.code),
+      type: String(data.type),
+      value: Number(data.value),
+      expires_at: String(data.expires_at ?? ""),
+      max_uses: Number(data.max_uses ?? 0),
+      used_count: Number(data.used_count ?? 0),
+      remaining: data.remaining === null || data.remaining === undefined ? null : Number(data.remaining),
+    };
   } catch {
     return null;
   }

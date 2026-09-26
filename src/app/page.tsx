@@ -14,7 +14,8 @@ export default function Home() {
       <Navbar />
       <main className="flex-1">
         <Hero />
-        <VideoShowcase />
+        {/* Video disembunyikan sementara — tampilkan lagi setelah simulasi video lengkap. */}
+        {/* <VideoShowcase /> */}
         <InteractiveDemo />
         <UspGrid />
         <UseCaseGrid />
