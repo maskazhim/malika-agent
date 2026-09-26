@@ -6,8 +6,8 @@
    - UNIQUE INDEX di unique_code + retry loop menangani race antar request.
    - Kode expired 24 jam setelah alokasi (code_expires_at).
 
-   Request:  { "order_id": "..." }
-   Response: { ok, unique_code, expires_at, base, amount(total) }
+    Request:  { "order_id": "...", "base": 12345 (opsional — total sebelum kode unik) }
+    Response: { ok, unique_code, expires_at, base, amount(total) }
 */
 
 interface D1Prepared {
@@ -42,14 +42,18 @@ export async function onRequestOptions() {
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
 
-  let body: { order_id?: unknown };
+  let body: { order_id?: unknown; base?: unknown };
   try {
-    body = (await request.json()) as { order_id?: unknown };
+    body = (await request.json()) as { order_id?: unknown; base?: unknown };
   } catch {
     return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
   }
   const order_id = String(body.order_id ?? "").slice(0, 64);
   if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
+  // Nominal dasar dari client (mis. berubah karena ganti masa langganan di halaman
+  // payment setelah order checkout tersimpan). Wajib > 0 bila disertakan.
+  const reqBase = Math.round(Number(body.base));
+  const hasBase = body.base !== undefined && body.base !== null && Number.isFinite(reqBase) && reqBase > 0;
 
   const nowIso = new Date().toISOString();
   const row = await env.DB.prepare(
@@ -68,26 +72,37 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     return new Response(JSON.stringify({ error: "order already finalized" }), { status: 409, headers: cors });
   }
 
-  // Kode lama masih hidup → pakai ulang, tidak perlu alokasi baru.
+  // Kode lama masih hidup → pakai ulang, dengan nominal dasar terbaru bila ada.
   if (
     row.unique_code != null &&
     row.code_expires_at > nowIso &&
     ACTIVE_STATUSES.includes(row.status)
   ) {
+    const base = hasBase ? reqBase : row.amount - row.unique_code;
+    const amount = base + (row.unique_code ?? 0);
+    if (hasBase && amount !== row.amount) {
+      await env.DB.prepare("UPDATE orders SET amount = ? WHERE order_id = ?")
+        .bind(amount, order_id)
+        .run();
+    }
     return Response.json(
       {
         ok: true,
         reused: true,
         unique_code: row.unique_code,
         expires_at: row.code_expires_at,
-        base: row.amount - row.unique_code,
-        amount: row.amount,
+        base,
+        amount,
       },
       { headers: cors }
     );
   }
 
-  const base = row.unique_code != null ? row.amount - row.unique_code : row.amount;
+  const base = hasBase
+    ? reqBase
+    : row.unique_code != null
+      ? row.amount - row.unique_code
+      : row.amount;
   const expires_at = new Date(Date.now() + CODE_TTL_MS).toISOString();
 
   const used = await env.DB.prepare(

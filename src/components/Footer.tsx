@@ -8,7 +8,7 @@ export default function Footer() {
             <span className="font-semibold text-white">Malika Agent</span>
           </div>
           <p className="mt-3 max-w-sm text-sm leading-relaxed text-stone-400">
-            AI teammate yang punya komputer sendiri — kerja 24/7 untuk bisnis Indonesia.
+            AI Agent yang kerja layaknya manusia — kerja 24/7 untuk bisnis Indonesia.
           </p>
         </div>
         <div>

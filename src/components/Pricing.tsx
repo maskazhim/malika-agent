@@ -153,6 +153,8 @@ export default function Pricing() {
       amount: String(total),
       order_id,
       promo_code: finalPromo?.code ?? "",
+      promo_type: finalPromo?.type ?? "",
+      promo_value: String(finalPromo?.value ?? 0),
       discount: String(finalDiscount),
       ...f,
     });

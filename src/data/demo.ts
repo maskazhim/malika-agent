@@ -441,7 +441,7 @@ export const PRICING = [
     name: "Starter",
     price: "Rp1.799.000",
     period: "/bulan",
-    desc: "Setara 2 karyawan manusia bekerja 24/7 nonstop.",
+    desc: "Setara 2 karyawan kerja 24/7 — cuma ¼ UMR Jakarta.",
     features: [
       "1 user",
       "2 komputer AI aktif 24 jam",
@@ -459,7 +459,7 @@ export const PRICING = [
     name: "Growth",
     price: "Rp4.599.000",
     period: "/bulan",
-    desc: "Setara 6 karyawan manusia bekerja 24/7 nonstop.",
+    desc: "Setara 6 karyawan manusia bekerja 24/7 nonstop — cuma ¼ UMR Jakarta.",
     features: [
       "Kuota penggunaan AI 3× lebih besar dari Starter",
       "3 user",
@@ -478,7 +478,7 @@ export const PRICING = [
     name: "Scale",
     price: "Rp10.999.000",
     period: "/bulan",
-    desc: "Setara 12 karyawan manusia bekerja 24/7 nonstop.",
+    desc: "Setara 12 karyawan manusia bekerja 24/7 nonstop — cuma ¼ UMR Jakarta.",
     features: [
       "Kuota penggunaan AI 9× lebih besar dari Starter",
       "6 user",
@@ -491,7 +491,7 @@ export const PRICING = [
       "Integrasi khusus sesuai dengan kebutuhan bisnis Anda",
       "Pendamping khusus untuk bisnis Anda",
     ],
-    cta: "Hubungi Kami",
+    cta: "Pilih Scale",
     popular: false,
   },
 ];

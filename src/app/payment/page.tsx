@@ -8,10 +8,16 @@ import { buildDynamicQris, formatRp, getStaticPayload, isValidQris, parseQris } 
 import {
   allocateCode,
   buildTransferWaLink,
+  calcDiscount,
+  DURATIONS,
+  durationLabel,
   newOrderId,
+  productLabel,
   saveOrder,
+  storedProduct,
   type AllocatedCode,
   type OrderMethod,
+  type PromoCheck,
 } from "@/lib/orders";
 
 const BANKS = [
@@ -37,7 +43,27 @@ function PaymentInner() {
   const email = q.get("email") ?? "-";
   const orderId = q.get("order_id") ?? "";
   const promoCode = (q.get("promo_code") ?? "").trim().toUpperCase();
-  const discount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
+  // amount dari checkout = total 1 bulan SETELAH voucher; queryDiscount = diskon voucher 1 bulan.
+  // Harga bulanan dasar direkonstruksi agar subtotal multi-bulan & diskon voucher bisa dihitung ulang.
+  const queryDiscount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
+  const monthsParam = Number(q.get("months") ?? 1);
+
+  const [months, setMonths] = useState<number>(
+    DURATIONS.includes(monthsParam as (typeof DURATIONS)[number]) ? monthsParam : 1
+  );
+  // Voucher diteruskan dari checkout (tipe+nilai) lalu divalidasi ulang ke server.
+  const [promo, setPromo] = useState<PromoCheck | null>(() => {
+    const t = (q.get("promo_type") ?? "").trim();
+    const v = Number(q.get("promo_value") ?? NaN);
+    if (!promoCode || (t !== "fixed" && t !== "percent") || !Number.isFinite(v)) return null;
+    return { code: promoCode, type: t, value: v };
+  });
+  const [promoNotice, setPromoNotice] = useState<string | null>(null);
+
+  const monthlyBase = amount + queryDiscount;
+  const subtotal = monthlyBase * months;
+  const discount = promo ? calcDiscount(promo, subtotal) : 0;
+  const totalNoCode = Math.max(0, subtotal - discount);
 
   const [method, setMethod] = useState<OrderMethod>(QRIS_ENABLED ? "qris" : "transfer");
   const [left, setLeft] = useState(30 * 60);
@@ -58,14 +84,48 @@ function PaymentInner() {
     return () => clearInterval(t);
   }, [left]);
 
-  // Alokasi kode unik sekali per order saat tab QRIS dibuka.
+  // Validasi ulang voucher ke server (kuota/expiry bisa berubah sejak checkout).
   useEffect(() => {
-    if (method !== "qris" || !orderId || allocFor.current === orderId) return;
-    allocFor.current = orderId;
+    if (!promoCode) return;
+    let alive = true;
+    fetch(`/api/promos?code=${encodeURIComponent(promoCode)}`)
+      .then(async (r) => {
+        const data = (await r.json().catch(() => null)) as
+          | (PromoCheck & { ok?: boolean; error?: string })
+          | null;
+        if (!alive) return;
+        if (!r.ok || !data?.ok) {
+          setPromo(null);
+          setPromoNotice(
+            `Kode ${promoCode} tidak bisa dipakai (${data?.error ?? "tidak valid"}). Total dihitung tanpa diskon voucher.`
+          );
+        } else {
+          setPromo({ code: String(data.code), type: String(data.type), value: Number(data.value) });
+          setPromoNotice(null);
+        }
+      })
+      .catch(() => {
+        if (alive) setPromoNotice("Gagal memeriksa ulang kode promo. Coba muat ulang halaman.");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [promoCode]);
+
+  // Alokasi kode unik sekali per order+nominal (nominal berubah saat durasi diganti).
+  useEffect(() => {
+    if (method !== "qris" || !orderId) return;
+    const key = `${orderId}:${totalNoCode}`;
+    if (allocFor.current === key) return;
+    allocFor.current = key;
+    setAlloc(null);
+    setQr(null);
+    let alive = true;
     setAllocLoading(true);
     setAllocError(null);
-    allocateCode(orderId)
+    allocateCode(orderId, totalNoCode)
       .then((a) => {
+        if (!alive) return;
         if (!a) {
           setAllocError("Gagal menyiapkan kode unik. Cek koneksi lalu muat ulang halaman.");
           return;
@@ -80,14 +140,21 @@ function PaymentInner() {
         if (!dyn) setAllocError("QRIS merchant tidak valid. Hubungi tim Malika.");
         else setQr(dyn);
       })
-      .catch(() => setAllocError("Gagal menyiapkan kode unik. Cek koneksi lalu muat ulang halaman."))
-      .finally(() => setAllocLoading(false));
-  }, [method, orderId]);
+      .catch(() => {
+        if (alive) setAllocError("Gagal menyiapkan kode unik. Cek koneksi lalu muat ulang halaman.");
+      })
+      .finally(() => {
+        if (alive) setAllocLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [method, orderId, totalNoCode]);
 
   const mm = String(Math.floor(left / 60)).padStart(2, "0");
   const ss = String(left % 60).padStart(2, "0");
 
-  const total = method === "qris" && alloc ? alloc.amount : amount;
+  const displayTotal = method === "qris" && alloc ? alloc.amount : totalNoCode;
 
   function copy(text: string, key: string) {
     navigator.clipboard?.writeText(text).catch(() => {});
@@ -96,10 +163,12 @@ function PaymentInner() {
   }
 
   async function confirm() {
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(totalNoCode) || totalNoCode <= 0) {
       setError("Nominal tidak valid.");
       return;
     }
+    const label = productLabel(product, months);
+    const stored = storedProduct(product, months);
     if (method === "transfer") {
       // Konfirmasi transfer langsung ke WhatsApp admin.
       setSending(true);
@@ -107,8 +176,8 @@ function PaymentInner() {
       const oid = orderId || newOrderId();
       await saveOrder({
         order_id: oid,
-        product,
-        amount,
+        product: stored,
+        amount: totalNoCode,
         nama,
         bisnis,
         telepon,
@@ -118,11 +187,13 @@ function PaymentInner() {
         status: "payment_proof",
         promo_code: promoCode,
       });
-      window.open(buildTransferWaLink({ order_id: oid, product, amount, nama }), "_blank");
+      window.open(buildTransferWaLink({ order_id: oid, product: label, amount: totalNoCode, nama }), "_blank");
       const params = new URLSearchParams({
         method,
         product,
-        amount: String(amount),
+        months: String(months),
+        amount: String(totalNoCode),
+        subtotal: String(subtotal),
         nama,
         order_id: oid,
         promo_code: promoCode,
@@ -141,7 +212,7 @@ function PaymentInner() {
     const oid = orderId || newOrderId();
     await saveOrder({
       order_id: oid,
-      product,
+      product: stored,
       amount: alloc.amount,
       nama,
       bisnis,
@@ -157,8 +228,10 @@ function PaymentInner() {
     const params = new URLSearchParams({
       method,
       product,
+      months: String(months),
       amount: String(alloc.amount),
       base: String(alloc.base),
+      subtotal: String(subtotal),
       unique_code: String(alloc.unique_code),
       nama,
       order_id: oid,
@@ -179,8 +252,46 @@ function PaymentInner() {
         Pembayaran <span className="malika-gradient-text">{method === "qris" ? "QRIS" : "Transfer Bank"}</span>
       </h1>
       <p className="mt-1 text-sm text-stone-600">
-        {product}/bulan · <span className="font-semibold text-stone-900">{formatRp(total)}</span> · a.n. {nama}
+        {productLabel(product, months)} ·{" "}
+        <span className="font-semibold text-stone-900">{formatRp(displayTotal)}</span> · a.n. {nama}
       </p>
+
+      {/* Masa langganan */}
+      <div className="glass mt-5 rounded-2xl p-3">
+        <p className="px-1 text-xs font-semibold uppercase tracking-widest text-teal-700">Masa langganan</p>
+        <div className="mt-2 grid grid-cols-3 gap-1">
+          {DURATIONS.map((m) => {
+            const sub = monthlyBase * m;
+            const disc = promo ? calcDiscount(promo, sub) : 0;
+            const tot = Math.max(0, sub - disc);
+            const isActive = months === m;
+            return (
+              <button
+                key={m}
+                onClick={() => setMonths(m)}
+                className={`rounded-xl px-2 py-2.5 text-center transition ${
+                  isActive ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
+                }`}
+              >
+                <span className="block text-sm font-semibold">{durationLabel(m)}</span>
+                <span className={`mt-0.5 block text-xs ${isActive ? "text-white/90" : "text-stone-400"}`}>
+                  {formatRp(tot)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {promo && discount > 0 ? (
+          <p className="mt-2 px-1 text-xs text-stone-500">
+            Termasuk voucher <span className="font-bold text-teal-700">{promo.code}</span> — hemat{" "}
+            <span className="font-semibold text-teal-700">{formatRp(discount)}</span> dari {formatRp(subtotal)}.
+          </p>
+        ) : (
+          <p className="mt-2 px-1 text-xs text-stone-400">
+            Harga flat {formatRp(monthlyBase)}/bulan × {months} bulan.
+          </p>
+        )}
+      </div>
 
       {/* Pilihan metode (QRIS disembunyikan sementara) */}
       {QRIS_ENABLED && (
@@ -237,6 +348,12 @@ function PaymentInner() {
                       <dt>Harga paket</dt>
                       <dd>{formatRp(alloc.base)}</dd>
                     </div>
+                    {promo && discount > 0 && (
+                      <div className="flex justify-between text-stone-500">
+                        <dt>Voucher {promo.code}</dt>
+                        <dd className="font-semibold text-teal-700">−{formatRp(discount)}</dd>
+                      </div>
+                    )}
                     <div className="flex justify-between text-stone-500">
                       <dt>Kode unik</dt>
                       <dd className="font-semibold text-teal-700">+{alloc.unique_code}</dd>
@@ -282,7 +399,7 @@ function PaymentInner() {
                 ))}
               </div>
               <p className="mt-3 text-xs leading-relaxed text-stone-500">
-                Transfer tepat <span className="font-semibold text-stone-800">{formatRp(amount)}</span> ke salah satu
+                Transfer tepat <span className="font-semibold text-stone-800">{formatRp(totalNoCode)}</span> ke salah satu
                 rekening di atas, lalu klik tombol di bawah — kamu akan diarahkan ke WhatsApp admin. Silakan kirimkan
                 bukti transfer untuk diverifikasi.
               </p>
@@ -307,7 +424,7 @@ function PaymentInner() {
           <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Ringkasan order</p>
           <dl className="mt-3 space-y-2 text-sm">
             {[
-              ["Produk", `${product} /bulan`],
+              ["Produk", productLabel(product, months)],
               ["Nama", nama],
               ["Bisnis", bisnis],
               ["Telepon", telepon],
@@ -318,21 +435,38 @@ function PaymentInner() {
                 <dd className="text-right font-medium">{v}</dd>
               </div>
             ))}
+            {months > 1 && (
+              <>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-stone-500">Harga per bulan</dt>
+                  <dd className="text-right font-medium">{formatRp(monthlyBase)}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-stone-500">Subtotal ({months} bulan)</dt>
+                  <dd className="text-right font-medium">{formatRp(subtotal)}</dd>
+                </div>
+              </>
+            )}
             {method === "qris" && alloc && (
               <div className="flex justify-between gap-3">
                 <dt className="text-stone-500">Kode unik</dt>
                 <dd className="text-right font-medium text-teal-700">+{alloc.unique_code}</dd>
               </div>
             )}
-            {promoCode && (
+            {promo && discount > 0 && (
               <div className="flex justify-between gap-3">
-                <dt className="text-stone-500">Promo {promoCode}</dt>
+                <dt className="text-stone-500">Voucher {promo.code}</dt>
                 <dd className="text-right font-medium text-teal-700">−{formatRp(discount)}</dd>
               </div>
             )}
+            {promoNotice && (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
+                {promoNotice}
+              </p>
+            )}
             <div className="flex justify-between gap-3 border-t border-white/70 pt-2">
               <dt className="font-semibold">Total</dt>
-              <dd className="font-bold">{formatRp(total)}</dd>
+              <dd className="font-bold">{formatRp(displayTotal)}</dd>
             </div>
           </dl>
           <div className="mt-4 rounded-2xl bg-white/60 p-3 text-xs leading-relaxed text-stone-500 ring-1 ring-white">

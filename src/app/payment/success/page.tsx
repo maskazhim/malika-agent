@@ -4,20 +4,23 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatRp } from "@/lib/qris";
-import { buildTransferWaLink } from "@/lib/orders";
+import { buildTransferWaLink, productLabel } from "@/lib/orders";
 
 function SuccessInner() {
   const q = useSearchParams();
   const method = q.get("method") ?? "qris";
   const product = q.get("product") ?? "-";
+  const months = Math.max(1, Number(q.get("months") ?? 1) || 1);
   const amount = Number(q.get("amount") ?? 0);
   const base = Number(q.get("base") ?? 0);
+  const subtotal = Number(q.get("subtotal") ?? 0);
   const uniqueCode = Number(q.get("unique_code") ?? 0);
   const nama = q.get("nama") ?? "-";
   const orderId = q.get("order_id") ?? "";
   const promoCode = (q.get("promo_code") ?? "").trim().toUpperCase();
   const discount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
   const isTransfer = method === "transfer";
+  const label = productLabel(product, months);
 
   return (
     <main className="mx-auto w-full max-w-xl px-4 py-14 sm:px-6">
@@ -50,8 +53,14 @@ function SuccessInner() {
         <dl className="mx-auto mt-6 max-w-sm space-y-2 rounded-2xl bg-white/60 p-4 text-left text-sm ring-1 ring-white">
           <div className="flex justify-between gap-3">
             <dt className="text-stone-500">Produk</dt>
-            <dd className="font-medium">{product}/bulan</dd>
+            <dd className="font-medium">{label}</dd>
           </div>
+          {months > 1 && subtotal > 0 && (
+            <div className="flex justify-between gap-3">
+              <dt className="text-stone-500">Subtotal ({months} bulan)</dt>
+              <dd className="font-medium">{formatRp(subtotal)}</dd>
+            </div>
+          )}
           {!isTransfer && base > 0 && uniqueCode > 0 && (
             <>
               <div className="flex justify-between gap-3">
@@ -66,7 +75,7 @@ function SuccessInner() {
           )}
           {promoCode && (
             <div className="flex justify-between gap-3">
-              <dt className="text-stone-500">Promo {promoCode}</dt>
+              <dt className="text-stone-500">Voucher {promoCode}</dt>
               <dd className="font-medium text-teal-700">−{formatRp(discount)}</dd>
             </div>
           )}
@@ -89,7 +98,7 @@ function SuccessInner() {
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
           {isTransfer && orderId ? (
             <a
-              href={buildTransferWaLink({ order_id: orderId, product, amount, nama })}
+              href={buildTransferWaLink({ order_id: orderId, product: label, amount, nama })}
               target="_blank"
               rel="noopener noreferrer"
               className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"

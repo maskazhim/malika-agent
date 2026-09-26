@@ -52,6 +52,26 @@ export function calcDiscount(p: PromoCheck, base: number): number {
 /* Nomor WhatsApp admin untuk konfirmasi transfer (sama dengan di Footer). */
 export const ADMIN_WA = "6285124317811";
 
+/* Label produk + masa langganan, mis. "Growth/bulan" atau "Growth · 6 bulan". */
+export function productLabel(product: string, months: number): string {
+  return months > 1 ? `${product} · ${months} bulan` : `${product}/bulan`;
+}
+
+/* Nilai yang disimpan ke kolom product DB (durasi hanya ditempel bila >1 bulan). */
+export function storedProduct(product: string, months: number): string {
+  return months > 1 ? `${product} · ${months} bulan` : product;
+}
+
+/* Opsi masa langganan (bulan). Harga flat: harga bulanan × durasi. */
+export const DURATIONS = [1, 6, 12] as const;
+export type DurationMonths = (typeof DURATIONS)[number];
+
+export function durationLabel(m: number): string {
+  if (m >= 12) return "1 Tahun";
+  if (m > 1) return `${m} Bulan`;
+  return "1 Bulan";
+}
+
 export function buildTransferWaLink(o: {
   order_id: string;
   product: string;
@@ -61,7 +81,7 @@ export function buildTransferWaLink(o: {
   const msg =
     `Halo Malika Agent, saya konfirmasi pembayaran transfer.\n\n` +
     `Order: ${o.order_id}\n` +
-    `Produk: ${o.product}/bulan\n` +
+    `Produk: ${o.product}\n` +
     `Total: Rp${o.amount.toLocaleString("id-ID")}\n` +
     `Nama: ${o.nama}\n\n` +
     `Silakan kirimkan bukti transfer untuk diverifikasi.`;
@@ -77,13 +97,19 @@ export interface AllocatedCode {
 }
 
 /* Minta kode unik 1-999 ke server (POST /api/allocate-code).
+   `base` opsional = total sebelum kode unik (dipakai saat nominal berubah,
+   mis. ganti masa langganan di halaman payment).
    Return null bila API belum tersedia — caller wajib menangani fallback. */
-export async function allocateCode(order_id: string): Promise<AllocatedCode | null> {
+export async function allocateCode(order_id: string, base?: number): Promise<AllocatedCode | null> {
   try {
     const res = await fetch("/api/allocate-code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order_id }),
+      body: JSON.stringify(
+        Number.isFinite(Number(base)) && Number(base) > 0
+          ? { order_id, base: Math.round(Number(base)) }
+          : { order_id }
+      ),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as Partial<AllocatedCode> & { ok?: boolean };
