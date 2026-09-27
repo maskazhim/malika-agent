@@ -549,7 +549,7 @@ export default function AdminPage() {
                 {menuFor === o.order_id && (
                   <tr className="border-b border-white/50 bg-stone-50/60">
                     <td colSpan={6} className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap justify-end gap-1.5">
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
                                 onClick={() => {
