@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
 
@@ -126,8 +127,10 @@ export default function AdminPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Menu titik-tiga + panel kredensial per order
+  // Menu titik-tiga + panel kredensial per order.
+  // Menu dirender via portal ke body (fixed) agar tidak terpotong container overflow-x-auto tabel.
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null);
   const [clients, setClients] = useState<ClientAccess[]>([]);
   const [credFor, setCredFor] = useState<string | null>(null);
   const [credForm, setCredForm] = useState({ access_url: "", email: "", password: "" });
@@ -184,8 +187,44 @@ export default function AdminPage() {
     void load(key);
   }
 
-  async function setStatus(order_id: string, status: string) {
+  function closeMenu() {
     setMenuFor(null);
+    setMenuAnchor(null);
+  }
+
+  function toggleMenu(e: React.MouseEvent<HTMLButtonElement>, order_id: string) {
+    if (menuFor === order_id) {
+      closeMenu();
+      return;
+    }
+    const r = e.currentTarget.getBoundingClientRect();
+    const MENU_W = 192;
+    const left = Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
+    // Flip ke atas kalau ruang bawah sempit.
+    const top = r.bottom + 4 + 240 > window.innerHeight ? Math.max(8, r.top - 248) : r.bottom + 4;
+    setMenuAnchor({ top, left });
+    setMenuFor(order_id);
+  }
+
+  // Tutup menu saat Escape / scroll / resize agar posisi fixed tidak nyangkut.
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = () => closeMenu();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuFor]);
+
+  async function setStatus(order_id: string, status: string) {
+    closeMenu();
     setUpdating(order_id);
     try {
       const res = await fetch("/api/orders", {
@@ -256,7 +295,7 @@ export default function AdminPage() {
 
   async function removeOrder(order_id: string) {
     if (!window.confirm("Hapus order ini permanen? Kode uniknya ikut dibebaskan.")) return;
-    setMenuFor(null);
+    closeMenu();
     setDeleting(order_id);
     try {
       const res = await fetch(`/api/orders?order_id=${encodeURIComponent(order_id)}`, { method: "DELETE" });
@@ -275,7 +314,7 @@ export default function AdminPage() {
 
   // Buka panel kirim credential untuk satu order (hanya order verified).
   function openCred(o: Order) {
-    setMenuFor(null);
+    closeMenu();
     setCredMsg(null);
     const existing = clients.find((c) => c.order_id === o.order_id);
     setCredForm({
@@ -532,22 +571,27 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="relative">
                       <button
-                        onClick={() => setMenuFor(menuFor === o.order_id ? null : o.order_id)}
+                        onClick={(e) => toggleMenu(e, o.order_id)}
                         aria-label="Menu aksi"
+                        aria-expanded={menuFor === o.order_id}
+                        aria-haspopup="menu"
                         className="flex h-8 w-8 items-center justify-center rounded-full bg-white/70 text-base font-bold tracking-widest text-stone-600 ring-1 ring-white hover:bg-white"
                       >
                         ⋮
                       </button>
-                      {menuFor === o.order_id && (
+                      {menuFor === o.order_id && menuAnchor && createPortal(
                         <>
                           <button
                             aria-label="Tutup menu"
-                            onClick={() => setMenuFor(null)}
-                            className="fixed inset-0 z-10 cursor-default"
+                            onClick={closeMenu}
+                            className="fixed inset-0 z-40 cursor-default bg-transparent"
                           />
-                          <div className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-stone-200">
+                          <div
+                            role="menu"
+                            style={{ top: menuAnchor.top, left: menuAnchor.left }}
+                            className="fixed z-50 max-h-[60vh] w-48 overflow-y-auto rounded-2xl bg-white shadow-xl ring-1 ring-stone-200"
+                          >
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
                                 onClick={() => {
@@ -632,9 +676,9 @@ export default function AdminPage() {
                             </button>
                             )}
                           </div>
-                        </>
+                        </>,
+                        document.body
                       )}
-                    </div>
                   </td>
                 </tr>
                 {expanded && (
