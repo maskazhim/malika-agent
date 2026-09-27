@@ -1,7 +1,6 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
 
@@ -127,10 +126,8 @@ export default function AdminPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Menu titik-tiga + panel kredensial per order.
-  // Menu dirender via portal ke body (fixed) agar tidak terpotong container overflow-x-auto tabel.
+  // Menu titik-tiga (panel expandable pendorong container) + panel kredensial per order.
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null);
   const [clients, setClients] = useState<ClientAccess[]>([]);
   const [credFor, setCredFor] = useState<string | null>(null);
   const [credForm, setCredForm] = useState({ access_url: "", email: "", password: "" });
@@ -189,39 +186,7 @@ export default function AdminPage() {
 
   function closeMenu() {
     setMenuFor(null);
-    setMenuAnchor(null);
   }
-
-  function toggleMenu(e: React.MouseEvent<HTMLButtonElement>, order_id: string) {
-    if (menuFor === order_id) {
-      closeMenu();
-      return;
-    }
-    const r = e.currentTarget.getBoundingClientRect();
-    const MENU_W = 192;
-    const left = Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
-    // Flip ke atas kalau ruang bawah sempit.
-    const top = r.bottom + 4 + 240 > window.innerHeight ? Math.max(8, r.top - 248) : r.bottom + 4;
-    setMenuAnchor({ top, left });
-    setMenuFor(order_id);
-  }
-
-  // Tutup menu saat Escape / scroll / resize agar posisi fixed tidak nyangkut.
-  useEffect(() => {
-    if (!menuFor) return;
-    const close = () => closeMenu();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeMenu();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [menuFor]);
 
   async function setStatus(order_id: string, status: string) {
     closeMenu();
@@ -572,33 +537,26 @@ export default function AdminPage() {
                   </td>
                   <td className="px-4 py-3">
                       <button
-                        onClick={(e) => toggleMenu(e, o.order_id)}
+                        onClick={() => setMenuFor(menuFor === o.order_id ? null : o.order_id)}
                         aria-label="Menu aksi"
                         aria-expanded={menuFor === o.order_id}
-                        aria-haspopup="menu"
                         className="flex h-8 w-8 items-center justify-center rounded-full bg-white/70 text-base font-bold tracking-widest text-stone-600 ring-1 ring-white hover:bg-white"
                       >
-                        ⋮
+                        {menuFor === o.order_id ? "✕" : "⋮"}
                       </button>
-                      {menuFor === o.order_id && menuAnchor && createPortal(
-                        <>
-                          <button
-                            aria-label="Tutup menu"
-                            onClick={closeMenu}
-                            className="fixed inset-0 z-40 cursor-default bg-transparent"
-                          />
-                          <div
-                            role="menu"
-                            style={{ top: menuAnchor.top, left: menuAnchor.left }}
-                            className="fixed z-50 max-h-[60vh] w-48 overflow-y-auto rounded-2xl bg-white shadow-xl ring-1 ring-stone-200"
-                          >
+                  </td>
+                </tr>
+                {menuFor === o.order_id && (
+                  <tr className="border-b border-white/50 bg-stone-50/60">
+                    <td colSpan={6} className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1.5">
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
                                 onClick={() => {
                                   void setStatus(o.order_id, "verified");
                                 }}
                                 disabled={updating === o.order_id}
-                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-60"
+                                className="rounded-full bg-teal-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
                               >
                                 {updating === o.order_id ? "…" : "✓ Verifikasi pembayaran"}
                               </button>
@@ -609,7 +567,7 @@ export default function AdminPage() {
                                   void setStatus(o.order_id, "setup_server");
                                 }}
                                 disabled={updating === o.order_id}
-                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                                className="rounded-full bg-blue-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
                               >
                                 🖥 Mulai set up server
                               </button>
@@ -618,7 +576,7 @@ export default function AdminPage() {
                               <>
                                 <button
                                   onClick={() => openCred(o)}
-                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-800 hover:bg-stone-100"
+                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
                                 >
                                   ✉ Kirim credential
                                 </button>
@@ -627,7 +585,7 @@ export default function AdminPage() {
                                     void setStatus(o.order_id, "retensi");
                                   }}
                                   disabled={updating === o.order_id}
-                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                  className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                                 >
                                   ✓ Selesai → Retensi
                                 </button>
@@ -640,7 +598,7 @@ export default function AdminPage() {
                                     void setStatus(o.order_id, "resubscribe");
                                   }}
                                   disabled={updating === o.order_id}
-                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-60"
+                                  className="rounded-full bg-violet-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
                                 >
                                   ↻ Resubscribe (+1)
                                 </button>
@@ -649,7 +607,7 @@ export default function AdminPage() {
                                     void setStatus(o.order_id, "churn");
                                   }}
                                   disabled={updating === o.order_id}
-                                  className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-500 hover:bg-stone-100 disabled:opacity-60"
+                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-stone-100 disabled:opacity-60"
                                 >
                                   ✕ Churn
                                 </button>
@@ -661,7 +619,7 @@ export default function AdminPage() {
                                   void setStatus(o.order_id, "cancelled");
                                 }}
                                 disabled={updating === o.order_id}
-                                className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-60"
                               >
                                 Batal
                               </button>
@@ -670,17 +628,15 @@ export default function AdminPage() {
                             <button
                               onClick={() => removeOrder(o.order_id)}
                               disabled={deleting === o.order_id}
-                              className="block w-full px-4 py-2.5 text-left text-xs font-semibold text-stone-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                              className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
                             >
                               {deleting === o.order_id ? "…" : "Hapus"}
                             </button>
                             )}
-                          </div>
-                        </>,
-                        document.body
-                      )}
-                  </td>
-                </tr>
+                      </div>
+                    </td>
+                  </tr>
+                )}
                 {expanded && (
                   <tr className="border-b border-white/50 bg-teal-50/40">
                     <td colSpan={6} className="px-4 py-4">
