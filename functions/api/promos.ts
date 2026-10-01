@@ -75,7 +75,32 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   )
     .bind(code)
     .first<PromoRow>();
-  if (!row) return new Response(JSON.stringify({ ok: false, error: "Kode promo tidak ditemukan." }), { status: 404, headers: cors });
+  if (!row) {
+    // Fallback: kode affiliate milik customer (diskon sesuai split referrer).
+    const aff = await env.DB.prepare(
+      "SELECT code, discount_percent FROM affiliate_codes WHERE code = ? AND active = 1"
+    )
+      .bind(code)
+      .first<{ code: string; discount_percent: number }>()
+      .catch(() => null);
+    if (!aff) {
+      return new Response(JSON.stringify({ ok: false, error: "Kode promo tidak ditemukan." }), { status: 404, headers: cors });
+    }
+    return Response.json(
+      {
+        ok: true,
+        code: aff.code,
+        type: "percent",
+        value: aff.discount_percent,
+        affiliate: true,
+        expires_at: "",
+        max_uses: 0,
+        used_count: 0,
+        remaining: null,
+      },
+      { headers: cors }
+    );
+  }
   if (!row.active) {
     return new Response(JSON.stringify({ ok: false, error: "Kode promo sudah nonaktif." }), { status: 410, headers: cors });
   }

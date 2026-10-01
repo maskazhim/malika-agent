@@ -111,6 +111,7 @@ const ALL_STAGES = [
   "payment_proof",
   "verified",
   "setup_server",
+  "onboard",
   "retensi",
   "churn",
   "resubscribe",
@@ -120,9 +121,9 @@ const ALL_STAGES = [
 const VIEW_STAGES: Record<string, string[]> = {
   marketing: ["checkout", "payment_proof", "verified"],
   sales: ["checkout", "payment_proof", "verified"],
-  support: ["verified", "setup_server", "retensi"],
-  it: ["verified", "setup_server", "retensi"],
-  ai_engineer: ["verified", "setup_server", "retensi"],
+  support: ["verified", "setup_server", "onboard", "retensi"],
+  it: ["verified", "setup_server", "onboard", "retensi"],
+  ai_engineer: ["verified", "setup_server", "onboard", "retensi"],
   retensi: ["retensi", "resubscribe", "churn"],
   bisdev: ALL_STAGES,
 };
@@ -142,15 +143,17 @@ export function canTransition(s: Session, from: string, to: string): boolean {
     if ((from === "checkout" || from === "payment_proof") && to === "cancelled") return true;
     return false;
   }
-  // Support: mulai setup + sudah itu saja (selain flag onboard).
+  // Support: mulai setup + jalankan greeting & onboard sampai retensi.
   if (d === "support") {
     if (from === "verified" && to === "setup_server") return true;
+    if (from === "setup_server" && to === "onboard") return true;
+    if (from === "onboard" && to === "retensi") return true;
     return false;
   }
-  // IT / AI engineer: jalankan setup sampai retensi.
+  // IT / AI engineer: jalankan setup sampai serah-terima onboard.
   if (d === "it" || d === "ai_engineer") {
     if (from === "verified" && to === "setup_server") return true;
-    if (from === "setup_server" && to === "retensi") return true;
+    if (from === "setup_server" && to === "onboard") return true;
     return false;
   }
   // Retensi: churn / perpanjang.
@@ -162,16 +165,25 @@ export function canTransition(s: Session, from: string, to: string): boolean {
   return false;
 }
 
-/* Flag onboarding paralel boleh dicentang oleh divisi pelaksana. */
-export function canSetOnboard(s: Session): boolean {
+/* Flag greeting paralel ("sudah menyapa customer baru") boleh dicentang oleh
+   divisi pelaksana. Alias lama canSetOnboard dipertahankan untuk kompatibilitas. */
+export function canSetGreeting(s: Session): boolean {
   if (s.is_admin || s.division === "admin") return true;
   return ["support", "it", "ai_engineer"].includes(s.division);
 }
 
-/* Kirim credential (POST /api/clients): pelaksana saat setup_server. */
+export function canSetOnboard(s: Session): boolean {
+  return canSetGreeting(s);
+}
+
+/* Kirim credential (POST /api/clients): pelaksana saat setup_server / onboard. */
 export function canSendCredential(s: Session, orderStatus: string): boolean {
   if (s.is_admin || s.division === "admin") return true;
-  if ((s.division === "it" || s.division === "ai_engineer") && orderStatus === "setup_server") return true;
+  if (
+    (s.division === "it" || s.division === "ai_engineer" || s.division === "support") &&
+    (orderStatus === "setup_server" || orderStatus === "onboard")
+  )
+    return true;
   return false;
 }
 

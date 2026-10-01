@@ -109,12 +109,12 @@ export function paymentConfirmedMail(o: {
       <li>Total: <strong>${fmtRp(o.amount)}</strong></li>
       <li>Order: <code>${o.order_id}</code></li>
     </ul>
-    <p>Setup server Malika Agent kamu memakan waktu <strong>1-3 hari kerja</strong> termasuk onboarding. Detail akses (URL, email, password) akan kami kirim via email terpisah setelah server siap.</p>
+    <p>Setup server Malika Agent kamu memakan waktu <strong>1-3 hari kerja</strong> termasuk greeting & onboarding. Detail akses (URL, email, password) akan kami kirim via email terpisah setelah server siap.</p>
     <p>Terima kasih sudah percaya Malika Agent!</p>`;
   return {
     subject,
     html: WRAP(inner),
-    text: `Halo ${o.nama},\n\nPembayaran ${o.product}/bulan (${fmtRp(o.amount)}, order ${o.order_id}) sudah terkonfirmasi.\n\nSetup server memakan waktu 1-3 hari kerja termasuk onboarding. Detail akses akan dikirim via email terpisah.\n\nTerima kasih!\nMalika Agent`,
+    text: `Halo ${o.nama},\n\nPembayaran ${o.product}/bulan (${fmtRp(o.amount)}, order ${o.order_id}) sudah terkonfirmasi.\n\nSetup server memakan waktu 1-3 hari kerja termasuk greeting & onboarding. Detail akses akan dikirim via email terpisah.\n\nTerima kasih!\nMalika Agent`,
   };
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PRICING } from "@/data/demo";
 import { formatRp } from "@/lib/qris";
-import { calcDiscount, newOrderId, saveOrder, type PromoCheck } from "@/lib/orders";
+import { calcDiscount, checkSubdomain, newOrderId, normSubdomain, saveOrder, subdomainError, type PromoCheck } from "@/lib/orders";
 
 const FALLBACK_AMOUNTS: Record<string, number> = {
   Starter: 1799000,
@@ -41,14 +41,19 @@ interface FormState {
   bisnis: string;
   telepon: string;
   email: string;
+  subdomain: string;
+  password: string;
 }
 
 export default function Pricing() {
   const router = useRouter();
   const [plans, setPlans] = useState<Plan[]>(fallbackPlans);
   const [open, setOpen] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState>({ nama: "", bisnis: "", telepon: "", email: "" });
+  const [form, setForm] = useState<FormState>({ nama: "", bisnis: "", telepon: "", email: "", subdomain: "", password: "" });
   const [error, setError] = useState<string | null>(null);
+  const [subMsg, setSubMsg] = useState<string | null>(null);
+  const [subOk, setSubOk] = useState<boolean | null>(null);
+  const [subChecking, setSubChecking] = useState(false);
   // Kode promo
   const [promoInput, setPromoInput] = useState("");
   const [promo, setPromo] = useState<PromoCheck | null>(null);
@@ -116,9 +121,11 @@ export default function Pricing() {
       bisnis: form.bisnis.trim(),
       telepon: form.telepon.trim(),
       email: form.email.trim(),
+      subdomain: normSubdomain(form.subdomain),
+      password: form.password,
     };
-    if (!f.nama || !f.bisnis || !f.telepon || !f.email) {
-      setError("Lengkapi semua field dulu ya.");
+    if (!f.nama || !f.bisnis || !f.telepon || !f.email || !f.subdomain || !f.password) {
+      setError("Lengkapi semua field dulu ya (termasuk subdomain & password).");
       return;
     }
     if (!/^[+0-9][0-9\s-]{7,}$/.test(f.telepon)) {
@@ -127,6 +134,19 @@ export default function Pricing() {
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
       setError("Email tidak valid.");
+      return;
+    }
+    const subErr = subdomainError(f.subdomain);
+    if (subErr) {
+      setError(subErr);
+      return;
+    }
+    if (f.password.length < 8) {
+      setError("Password minimal 8 karakter (untuk login agent & portal).");
+      return;
+    }
+    if (subOk === false) {
+      setError(subMsg ?? "Subdomain sudah dipakai, pilih yang lain.");
       return;
     }
     if (!active || !active.priceInt) {
@@ -146,6 +166,14 @@ export default function Pricing() {
     }
     const finalDiscount = finalPromo ? calcDiscount(finalPromo, active.priceInt) : 0;
     const total = active.priceInt - finalDiscount;
+    // Cek ulang subdomain sesaat sebelum checkout (cegah rebutan).
+    const recheck = await checkSubdomain(f.subdomain);
+    if (!recheck.available) {
+      setSubOk(false);
+      setSubMsg(recheck.reason ?? "Subdomain sudah dipakai.");
+      setError(recheck.reason ?? "Subdomain sudah dipakai, pilih yang lain.");
+      return;
+    }
     setError(null);
     const order_id = newOrderId();
     const q = new URLSearchParams({
@@ -156,9 +184,14 @@ export default function Pricing() {
       promo_type: finalPromo?.type ?? "",
       promo_value: String(finalPromo?.value ?? 0),
       discount: String(finalDiscount),
-      ...f,
+      nama: f.nama,
+      bisnis: f.bisnis,
+      telepon: f.telepon,
+      email: f.email,
+      subdomain: f.subdomain,
     });
     // Simpan order tahap checkout ke D1 (fallback localStorage bila API belum siap).
+    // Password ikut via POST body (tidak lewat URL), disimpan sebagai hash di server.
     void saveOrder({
       order_id,
       product: active.name,
@@ -169,6 +202,8 @@ export default function Pricing() {
     });
     setOpen(null);
     resetPromo();
+    setSubMsg(null);
+    setSubOk(null);
     router.push(`/payment?${q.toString()}`);
   }
 
@@ -191,7 +226,33 @@ export default function Pricing() {
   }
 
   const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((s) => ({ ...s, [k]: e.target.value }));
+    setForm((s) => ({ ...s, [k]: k === "subdomain" ? e.target.value.toLowerCase() : e.target.value }));
+
+  // Live-check subdomain (debounce) saat modal checkout terbuka.
+  useEffect(() => {
+    if (!open) return;
+    const sub = normSubdomain(form.subdomain);
+    if (!sub) {
+      setSubOk(null);
+      setSubMsg(null);
+      return;
+    }
+    const err = subdomainError(sub);
+    if (err) {
+      setSubOk(false);
+      setSubMsg(err);
+      return;
+    }
+    setSubChecking(true);
+    const t = setTimeout(() => {
+      void checkSubdomain(sub).then((r) => {
+        setSubOk(r.available);
+        setSubMsg(r.available ? `${sub}.malika.ai tersedia ✓` : (r.reason ?? "Subdomain sudah dipakai."));
+        setSubChecking(false);
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [form.subdomain, open]);
 
   return (
     <section id="harga" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-12 sm:px-6">
@@ -230,6 +291,8 @@ export default function Pricing() {
               onClick={() => {
                 setOpen(p.key);
                 setError(null);
+                setSubMsg(null);
+                setSubOk(null);
                 resetPromo();
               }}
               className={`mt-6 rounded-full px-5 py-2.5 text-center text-sm font-semibold transition hover:opacity-90 ${
@@ -249,7 +312,7 @@ export default function Pricing() {
       </p>
 
       {active && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => { setOpen(null); resetPromo(); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => { setOpen(null); resetPromo(); setSubMsg(null); setSubOk(null); }}>
           <div
             className="glass-strong feed-in w-full max-w-md rounded-3xl p-7"
             onClick={(e) => e.stopPropagation()}
@@ -262,7 +325,7 @@ export default function Pricing() {
                   <span className="text-sm font-normal text-stone-500">{active.period}</span>
                 </h3>
               </div>
-              <button onClick={() => { setOpen(null); resetPromo(); }} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
+              <button onClick={() => { setOpen(null); resetPromo(); setSubMsg(null); setSubOk(null); }} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
             </div>
             <form onSubmit={submit} className="mt-5 space-y-3">
               <label className="block">
@@ -288,6 +351,37 @@ export default function Pricing() {
                   />
                 </label>
               ))}
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Subdomain Malika Agent</span>
+                <div className="flex items-center gap-1">
+                  <input
+                    value={form.subdomain}
+                    onChange={set("subdomain")}
+                    placeholder="cth. kopinusantara"
+                    autoComplete="off"
+                    className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm lowercase outline-none focus:border-teal-400"
+                  />
+                  <span className="shrink-0 text-xs text-stone-400">.malika.ai</span>
+                </div>
+                {subChecking ? (
+                  <p className="mt-1 text-xs text-stone-400">Memeriksa ketersediaan…</p>
+                ) : subMsg ? (
+                  <p className={`mt-1 text-xs font-medium ${subOk ? "text-teal-700" : "text-red-600"}`}>{subMsg}</p>
+                ) : (
+                  <p className="mt-1 text-xs text-stone-400">Pilih nama unik untuk agent kamu, mis. kopinusantara.malika.ai</p>
+                )}
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Password (untuk login agent & portal)</span>
+                <input
+                  value={form.password}
+                  onChange={set("password")}
+                  placeholder="min. 8 karakter"
+                  type="password"
+                  autoComplete="new-password"
+                  className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+                />
+              </label>
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>}
               <div className="rounded-xl bg-white/60 p-3 ring-1 ring-white">
                 <span className="mb-1 block text-xs font-medium text-stone-500">Kode promo (opsional)</span>

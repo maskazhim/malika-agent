@@ -20,6 +20,36 @@ export interface OrderPayload {
   unique_code?: number | null;
   code_expires_at?: string;
   promo_code?: string;
+  subdomain?: string;
+  password?: string;
+}
+
+/* Normalisasi + validasi ringan subdomain di sisi klien. */
+export function normSubdomain(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\.malika\.ai$/i, "").slice(0, 30);
+}
+
+export function subdomainError(raw: string): string | null {
+  const sub = normSubdomain(raw);
+  if (!sub) return "Isi subdomain dulu ya.";
+  if (!/^[a-z0-9-]{3,30}$/.test(sub) || sub.startsWith("-") || sub.endsWith("-")) {
+    return "Subdomain 3-30 karakter (huruf kecil, angka, strip).";
+  }
+  return null;
+}
+
+/* Cek ketersediaan subdomain ke server. Return {available, reason}. */
+export async function checkSubdomain(raw: string): Promise<{ available: boolean; reason?: string }> {
+  const sub = normSubdomain(raw);
+  if (!sub) return { available: false, reason: "Isi subdomain dulu ya." };
+  try {
+    const res = await fetch(`/api/subdomains?check=${encodeURIComponent(sub)}`);
+    const data = (await res.json()) as { available?: boolean; reason?: string };
+    if (!res.ok) return { available: false, reason: "Gagal memeriksa subdomain." };
+    return { available: !!data.available, reason: data.reason };
+  } catch {
+    return { available: false, reason: "Gagal memeriksa subdomain." };
+  }
 }
 
 export interface PromoCheck {

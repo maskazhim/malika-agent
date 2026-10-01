@@ -1,7 +1,8 @@
 /* Cloudflare Pages Functions — /api/orders
    Menyimpan daftar order ke D1 (binding `DB`).
-   Pipeline: checkout -> payment_proof -> verified -> setup_server -> retensi
+   Pipeline: checkout -> payment_proof -> verified -> setup_server -> onboard -> retensi
    (cabang retensi -> churn / resubscribe), plus cancelled.
+   Flag greeting_done = "sudah menyapa customer baru" (paralel, pengganti onboard_done).
    Akses dibatasi sesi staff + matriks divisi (lihat _auth.ts).
 
    Akses:
@@ -32,10 +33,12 @@ interface Env {
 
 import {
   canDeleteOrder,
+  canSetGreeting,
   canSetOnboard,
   canTransition,
   cors,
   getSession,
+  sha256Hex,
   visibleStages,
   type Session,
 } from "./_auth";
@@ -55,10 +58,13 @@ interface OrderBody {
   unique_code?: number;
   code_expires_at?: string;
   promo_code?: string;
+  subdomain?: string;
+  password?: string;
+  password_hash?: string;
 }
 
 const LIST_COLUMNS =
-  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code, onboard_done, retensi_at, renewal_count";
+  "order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code, onboard_done, greeting_done, retensi_at, renewal_count, subdomain";
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
@@ -108,6 +114,39 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   const order_id = String(b.order_id ?? "").slice(0, 64);
   if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
 
+  // Subdomain booking (opsional saat checkout). Normalisasi + validasi ringan;
+  // clash dicek dengan mengecualikan order ini sendiri.
+  const subdomain = String(b.subdomain ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.malika\.ai$/i, "")
+    .slice(0, 30);
+  if (subdomain) {
+    if (!/^[a-z0-9-]{3,30}$/.test(subdomain) || subdomain.startsWith("-") || subdomain.endsWith("-")) {
+      return new Response(JSON.stringify({ error: "Subdomain tidak valid." }), { status: 400, headers: cors });
+    }
+    const clash = await env.DB.prepare(
+      "SELECT order_id FROM orders WHERE subdomain = ? AND order_id != ? LIMIT 1"
+    )
+      .bind(subdomain, order_id)
+      .first()
+      .catch(() => null);
+    if (clash) {
+      return new Response(JSON.stringify({ error: "Subdomain sudah dipakai." }), { status: 409, headers: cors });
+    }
+  }
+
+  // Password pilihan customer (opsional saat checkout, min. 8 karakter).
+  // Disimpan sebagai hash; plain tidak pernah disimpan.
+  let password_hash = String(b.password_hash ?? "").slice(0, 128);
+  const plainPassword = String(b.password ?? "");
+  if (plainPassword) {
+    if (plainPassword.length < 8) {
+      return new Response(JSON.stringify({ error: "Password minimal 8 karakter." }), { status: 400, headers: cors });
+    }
+    password_hash = await sha256Hex(plainPassword);
+  }
+
   const row = {
     order_id,
     product: String(b.product ?? "-").slice(0, 64),
@@ -126,22 +165,49 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   };
 
   await env.DB.prepare(
-    `INSERT INTO orders (order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO orders (order_id, product, amount, nama, bisnis, telepon, email, method, bukti_filename, status, created_at, unique_code, code_expires_at, promo_code, subdomain, password_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(order_id) DO UPDATE SET
        product=excluded.product, amount=excluded.amount, nama=excluded.nama,
        bisnis=excluded.bisnis, telepon=excluded.telepon, email=excluded.email,
        method=excluded.method, bukti_filename=excluded.bukti_filename,
        status=excluded.status, created_at=excluded.created_at,
        unique_code=excluded.unique_code, code_expires_at=excluded.code_expires_at,
-       promo_code=excluded.promo_code`
+       promo_code=excluded.promo_code,
+       subdomain=CASE WHEN excluded.subdomain != '' THEN excluded.subdomain ELSE orders.subdomain END,
+       password_hash=CASE WHEN excluded.password_hash != '' THEN excluded.password_hash ELSE orders.password_hash END`
   )
     .bind(
       row.order_id, row.product, row.amount, row.nama, row.bisnis, row.telepon,
       row.email, row.method, row.bukti_filename, row.status, row.created_at,
-      row.unique_code, row.code_expires_at, row.promo_code
+      row.unique_code, row.code_expires_at, row.promo_code, subdomain, password_hash
     )
     .run();
+
+  // Catat booking subdomain (best-effort, agar tercatat meski frontend lupa panggil /api/subdomains).
+  if (subdomain) {
+    await env.DB.prepare(
+      `INSERT INTO subdomains (subdomain, order_id, email, status, access_url, created_at)
+       VALUES (?, ?, ?, 'reserved', ?, ?)
+       ON CONFLICT(subdomain) DO UPDATE SET order_id=excluded.order_id, email=excluded.email`
+    )
+      .bind(subdomain, order_id, row.email, `https://${subdomain}.malika.ai`, new Date().toISOString())
+      .run()
+      .catch(() => {});
+  }
+
+  // Buat akun portal customer otomatis bila password diisi saat checkout.
+  // Hanya saat password baru diberikan (tidak menimpa akun yang sudah ada).
+  if (password_hash && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
+    await env.DB.prepare(
+      `INSERT INTO customers (email, pass_hash, name, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(email) DO NOTHING`
+    )
+      .bind(row.email.toLowerCase(), password_hash, row.nama, new Date().toISOString())
+      .run()
+      .catch(() => {});
+  }
 
   return Response.json({ ok: true, order_id }, { headers: cors });
 }
@@ -151,22 +217,23 @@ const KNOWN_STATUSES = [
   "payment_proof",
   "verified",
   "setup_server",
+  "onboard",
   "retensi",
   "churn",
   "resubscribe",
   "cancelled",
 ];
 
-// PATCH /api/orders {order_id, status?, onboard_done?} — staff sesuai matriks.
+// PATCH /api/orders {order_id, status?, onboard_done?, greeting_done?} — staff sesuai matriks.
 export async function onRequestPatch({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s: Session | null = await getSession(request, env);
   if (!s) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
-  let b: { order_id?: unknown; status?: unknown; onboard_done?: unknown };
+  let b: { order_id?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
   try {
-    b = (await request.json()) as { order_id?: unknown; status?: unknown; onboard_done?: unknown };
+    b = (await request.json()) as { order_id?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
   } catch {
     return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
   }
@@ -183,15 +250,18 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
 
   const changed: string[] = [];
 
-  // 1) Flag onboarding paralel.
-  if (b.onboard_done !== undefined) {
-    if (!canSetOnboard(s)) {
+  // 1) Flag greeting paralel ("sudah menyapa customer baru").
+  //    onboard_done diterima sebagai alias lama demi kompatibilitas UI lama.
+  const greetingVal = b.greeting_done !== undefined ? b.greeting_done : b.onboard_done;
+  if (greetingVal !== undefined) {
+    if (!canSetGreeting(s) && !canSetOnboard(s)) {
       return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
     }
-    await env.DB.prepare("UPDATE orders SET onboard_done = ? WHERE order_id = ?")
-      .bind(b.onboard_done ? 1 : 0, order_id)
+    const v = greetingVal ? 1 : 0;
+    await env.DB.prepare("UPDATE orders SET greeting_done = ?, onboard_done = ? WHERE order_id = ?")
+      .bind(v, v, order_id)
       .run();
-    changed.push("onboard_done");
+    changed.push("greeting_done");
   }
 
   // 2) Pindah status pipeline.
@@ -241,11 +311,44 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   // Order baru saja verified -> kirim email konfirmasi pembayaran (best-effort).
   if (changed.includes("status") && status === "verified" && before.status !== "verified") {
     // Promo terpakai tepat sekali (transisi ke verified pertama kali).
+    // Kode affiliate dicatat ke affiliate_referrals (komisi payable), bukan ke promos.
     if (before.promo_code) {
-      await env.DB.prepare("UPDATE promos SET used_count = used_count + 1 WHERE code = ?")
+      const aff = await env.DB.prepare(
+        "SELECT code, discount_percent, commission_percent FROM affiliate_codes WHERE code = ? AND active = 1"
+      )
         .bind(before.promo_code)
-        .run()
-        .catch(() => {});
+        .first<{ code: string; discount_percent: number; commission_percent: number }>()
+        .catch(() => null);
+      if (aff) {
+        const paidRow = await env.DB.prepare("SELECT amount FROM orders WHERE order_id = ?")
+          .bind(order_id)
+          .first<{ amount: number }>()
+          .catch(() => null);
+        const finalAmount = Math.max(0, Math.round(Number(paidRow?.amount ?? 0)));
+        const d = Math.max(0, Math.min(100, Math.round(aff.discount_percent)));
+        const k = Math.max(0, Math.min(100, Math.round(aff.commission_percent)));
+        const commission = Math.round((finalAmount * k) / 100);
+        // Rekonstruksi diskon dari nominal akhir (diskon % dari harga dasar).
+        const discountAmt = d >= 100 ? finalAmount : Math.round((finalAmount * d) / Math.max(1, 100 - d));
+        const dup = await env.DB.prepare("SELECT id FROM affiliate_referrals WHERE order_id = ?")
+          .bind(order_id)
+          .first()
+          .catch(() => null);
+        if (!dup) {
+          await env.DB.prepare(
+            `INSERT INTO affiliate_referrals (code, order_id, discount_amount, commission_amount, status, created_at)
+             VALUES (?, ?, ?, ?, 'payable', ?)`
+          )
+            .bind(aff.code, order_id, discountAmt, commission, new Date().toISOString())
+            .run()
+            .catch(() => {});
+        }
+      } else {
+        await env.DB.prepare("UPDATE promos SET used_count = used_count + 1 WHERE code = ?")
+          .bind(before.promo_code)
+          .run()
+          .catch(() => {});
+      }
     }
     try {
       const order = await env.DB.prepare(

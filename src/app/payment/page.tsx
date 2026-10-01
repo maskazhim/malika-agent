@@ -42,6 +42,7 @@ function PaymentInner() {
   const telepon = q.get("telepon") ?? "-";
   const email = q.get("email") ?? "-";
   const orderId = q.get("order_id") ?? "";
+  const subdomain = (q.get("subdomain") ?? "").trim().toLowerCase();
   const promoCode = (q.get("promo_code") ?? "").trim().toUpperCase();
   // amount dari checkout = total 1 bulan SETELAH voucher; queryDiscount = diskon voucher 1 bulan.
   // Harga bulanan dasar direkonstruksi agar subtotal multi-bulan & diskon voucher bisa dihitung ulang.
@@ -186,6 +187,7 @@ function PaymentInner() {
         bukti_filename: "",
         status: "payment_proof",
         promo_code: promoCode,
+        subdomain,
       });
       window.open(buildTransferWaLink({ order_id: oid, product: label, amount: totalNoCode, nama }), "_blank");
       const params = new URLSearchParams({
@@ -224,6 +226,7 @@ function PaymentInner() {
       unique_code: alloc.unique_code,
       code_expires_at: alloc.expires_at,
       promo_code: promoCode,
+      subdomain,
     });
     const params = new URLSearchParams({
       method,
@@ -429,6 +432,7 @@ function PaymentInner() {
               ["Bisnis", bisnis],
               ["Telepon", telepon],
               ["Email", email],
+              ["Subdomain", subdomain ? `${subdomain}.malika.ai` : "-"],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-stone-500">{k}</dt>

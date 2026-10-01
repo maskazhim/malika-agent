@@ -43,12 +43,18 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
   const { results } = await env.DB.prepare(
-    "SELECT id, order_id, client_name, access_url, email, email_status, created_at FROM clients ORDER BY id DESC LIMIT 200"
+    "SELECT id, order_id, client_name, access_url, email, email_status, created_at, subdomain FROM clients ORDER BY id DESC LIMIT 200"
   ).all();
   return Response.json({ clients: results ?? [] }, { headers: cors });
 }
 
 // POST /api/clients — kirim credential (divisi pelaksana saat setup_server / admin).
+// Mode 1-klik (order baru): body {order_id} saja — nama/email/subdomain diambil
+// dari order, password agent digenerate acak (plain hanya dipakai untuk email,
+// yang disimpan hanya hash). Password checkout dipakai untuk login portal
+// customer (tabel customers), bukan password agent.
+// Mode legacy (order lama tanpa subdomain): body lengkap
+// {client_name, access_url, email, password, order_id?} seperti sebelumnya.
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s = await getSession(request, env);
@@ -68,26 +74,60 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
   }
 
-  const client_name = String(b.client_name ?? "").trim().slice(0, 128);
-  let access_url = String(b.access_url ?? "").trim().slice(0, 256);
-  const email = String(b.email ?? "").trim().slice(0, 128);
-  const password = String(b.password ?? "");
   const order_id = String(b.order_id ?? "").slice(0, 64);
+  const hasManualFields =
+    String(b.client_name ?? "").trim() !== "" ||
+    String(b.access_url ?? "").trim() !== "" ||
+    String(b.password ?? "") !== "";
 
-  if (!client_name) return new Response(JSON.stringify({ error: "nama klien wajib diisi" }), { status: 400, headers: cors });
-  if (!/^https?:\/\/.+\..+/.test(access_url)) {
-    // Boleh input "namaklien.malika.ai" saja — otomatis jadi https://...
-    if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(access_url)) access_url = `https://${access_url}`;
-    else return new Response(JSON.stringify({ error: "URL akses tidak valid" }), { status: 400, headers: cors });
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return new Response(JSON.stringify({ error: "email tidak valid" }), { status: 400, headers: cors });
-  }
-  if (password.length < 8) {
-    return new Response(JSON.stringify({ error: "password minimal 8 karakter" }), { status: 400, headers: cors });
+  let client_name = String(b.client_name ?? "").trim().slice(0, 128);
+  let access_url = String(b.access_url ?? "").trim().slice(0, 256);
+  let email = String(b.email ?? "").trim().slice(0, 128);
+  let password = String(b.password ?? "");
+  let subdomain = "";
+
+  // Mode 1-klik: hanya order_id, tanpa field manual.
+  if (order_id && !hasManualFields) {
+    const ord = await env.DB.prepare(
+      "SELECT nama, email, subdomain FROM orders WHERE order_id = ?"
+    )
+      .bind(order_id)
+      .first<{ nama: string; email: string; subdomain: string }>()
+      .catch(() => null);
+    if (!ord) return new Response(JSON.stringify({ error: "order tidak ditemukan" }), { status: 404, headers: cors });
+    if (!ord.subdomain) {
+      return new Response(
+        JSON.stringify({ error: "Order ini belum punya subdomain — isi manual (mode legacy)." }),
+        { status: 400, headers: cors }
+      );
+    }
+    subdomain = ord.subdomain;
+    client_name = (ord.nama || "").slice(0, 128);
+    email = (ord.email || "").trim().slice(0, 128);
+    access_url = `https://${subdomain}.malika.ai`;
+    password = genPassword(14);
+    if (!client_name) return new Response(JSON.stringify({ error: "nama klien kosong di order" }), { status: 400, headers: cors });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return new Response(JSON.stringify({ error: "email order tidak valid" }), { status: 400, headers: cors });
+    }
+  } else {
+    if (!client_name) return new Response(JSON.stringify({ error: "nama klien wajib diisi" }), { status: 400, headers: cors });
+    if (!/^https?:\/\/.+\..+/.test(access_url)) {
+      // Boleh input "namaklien.malika.ai" saja — otomatis jadi https://...
+      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(access_url)) access_url = `https://${access_url}`;
+      else return new Response(JSON.stringify({ error: "URL akses tidak valid" }), { status: 400, headers: cors });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return new Response(JSON.stringify({ error: "email tidak valid" }), { status: 400, headers: cors });
+    }
+    if (password.length < 8) {
+      return new Response(JSON.stringify({ error: "password minimal 8 karakter" }), { status: 400, headers: cors });
+    }
+    const m = access_url.match(/^https?:\/\/([a-z0-9-]+)\.malika\.ai\/?$/i);
+    if (m) subdomain = m[1].toLowerCase();
   }
 
-  // Gate: pelaksana (it/ai_engineer) hanya saat order di tahap setup_server.
+  // Gate: pelaksana (support/it/ai_engineer) hanya saat order di tahap setup_server/onboard.
   if (order_id) {
     const ord = await env.DB.prepare("SELECT status FROM orders WHERE order_id = ?")
       .bind(order_id)
@@ -95,7 +135,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       .catch(() => null);
     if (!ord) return new Response(JSON.stringify({ error: "order tidak ditemukan" }), { status: 404, headers: cors });
     if (!canSendCredential(s, ord.status)) {
-      return new Response(JSON.stringify({ error: "kirim credential hanya saat tahap set up server" }), { status: 403, headers: cors });
+      return new Response(JSON.stringify({ error: "kirim credential hanya saat tahap set up server / onboarding" }), { status: 403, headers: cors });
     }
   } else if (!canSendCredential(s, "setup_server")) {
     return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
@@ -103,10 +143,10 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
 
   const created_at = new Date().toISOString();
   const res = (await env.DB.prepare(
-    `INSERT INTO clients (order_id, client_name, access_url, email, password_hash, email_status, created_at)
-     VALUES (?, ?, ?, ?, ?, 'sending', ?)`
+    `INSERT INTO clients (order_id, client_name, access_url, email, password_hash, email_status, created_at, subdomain)
+     VALUES (?, ?, ?, ?, ?, 'sending', ?, ?)`
   )
-    .bind(order_id, client_name, access_url, email, await sha256Hex(password), created_at)
+    .bind(order_id, client_name, access_url, email, await sha256Hex(password), created_at, subdomain)
     .run()) as { meta?: { last_row_id?: number } };
   const id = res?.meta?.last_row_id ?? 0;
 
@@ -123,9 +163,27 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     .run();
 
   return Response.json(
-    { ok: true, id, email_status: mail.ok ? "sent" : "failed", email_error: mail.error ?? null },
+    {
+      ok: true,
+      id,
+      email_status: mail.ok ? "sent" : "failed",
+      email_error: mail.error ?? null,
+      access_url,
+      email,
+      // Password plain dikembalikan sekali agar admin bisa melihat/menyimpan;
+      // tidak disimpan di DB (hanya hash).
+      password,
+      auto: order_id !== "" && !hasManualFields,
+    },
     { headers: cors }
   );
+}
+
+/* Password acak aman untuk akun agent (huruf+angka, tanpa karakter ambigu). */
+function genPassword(len: number): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const buf = crypto.getRandomValues(new Uint8Array(len));
+  return [...buf].map((b) => chars[b % chars.length]).join("");
 }
 
 // DELETE /api/clients?id=xxx — khusus admin.

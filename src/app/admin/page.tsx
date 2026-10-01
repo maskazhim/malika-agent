@@ -19,7 +19,9 @@ interface Order {
   unique_code: number | null;
   code_expires_at: string;
   promo_code: string;
+  subdomain: string;
   onboard_done: number;
+  greeting_done: number;
   retensi_at: string;
   renewal_count: number;
 }
@@ -47,6 +49,7 @@ const FILTERS = [
   { key: "payment_proof", label: "Perlu verifikasi" },
   { key: "verified", label: "Terverifikasi" },
   { key: "setup_server", label: "Set up server" },
+  { key: "onboard", label: "Onboarding" },
   { key: "retensi", label: "Retensi" },
   { key: "churn", label: "Churn" },
   { key: "resubscribe", label: "Resubscribe" },
@@ -58,6 +61,7 @@ const STATUS_STYLE: Record<string, string> = {
   payment_proof: "bg-amber-100 text-amber-800",
   verified: "bg-teal-100 text-teal-800",
   setup_server: "bg-blue-100 text-blue-800",
+  onboard: "bg-indigo-100 text-indigo-800",
   retensi: "bg-emerald-100 text-emerald-800",
   churn: "bg-stone-300 text-stone-700",
   resubscribe: "bg-violet-100 text-violet-800",
@@ -69,6 +73,7 @@ const STATUS_LABEL: Record<string, string> = {
   payment_proof: "Perlu verifikasi",
   verified: "Terverifikasi",
   setup_server: "Set up server",
+  onboard: "Onboarding",
   retensi: "Retensi",
   churn: "Churn",
   resubscribe: "Resubscribe",
@@ -84,9 +89,12 @@ function canStartSetup(me: MeUser | null): boolean {
   return !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer"].includes(me.division));
 }
 function canFinishSetup(me: MeUser | null): boolean {
-  return !!me && (me.is_admin || ["admin", "it", "ai_engineer"].includes(me.division));
+  return !!me && (me.is_admin || ["admin", "it", "ai_engineer", "support"].includes(me.division));
 }
-function canOnboard(me: MeUser | null): boolean {
+function canFinishOnboard(me: MeUser | null): boolean {
+  return !!me && (me.is_admin || ["admin", "support"].includes(me.division));
+}
+function canGreet(me: MeUser | null): boolean {
   return !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer"].includes(me.division));
 }
 function canRetensiMove(me: MeUser | null): boolean {
@@ -112,13 +120,14 @@ interface ClientAccess {
   email: string;
   email_status: string;
   created_at: string;
+  subdomain?: string;
 }
 
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
   const [me, setMe] = useState<MeUser | null>(null);
-  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users" | "affiliate">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -228,13 +237,13 @@ export default function AdminPage() {
     }
   }
 
-  async function setOnboard(order_id: string, done: boolean) {
+  async function setGreeting(order_id: string, done: boolean) {
     setUpdating(order_id);
     try {
       const res = await fetch("/api/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id, onboard_done: done }),
+        body: JSON.stringify({ order_id, greeting_done: done }),
       });
       if (res.status === 401) {
         router.replace("/login");
@@ -245,9 +254,9 @@ export default function AdminPage() {
         return;
       }
       if (!res.ok) throw new Error("gagal");
-      setOrders((os) => os.map((o) => (o.order_id === order_id ? { ...o, onboard_done: done ? 1 : 0 } : o)));
+      setOrders((os) => os.map((o) => (o.order_id === order_id ? { ...o, greeting_done: done ? 1 : 0, onboard_done: done ? 1 : 0 } : o)));
     } catch {
-      setError("Gagal update onboarding.");
+      setError("Gagal update greeting.");
     } finally {
       setUpdating(null);
     }
@@ -277,13 +286,15 @@ export default function AdminPage() {
     }
   }
 
-  // Buka panel kirim credential untuk satu order (hanya order verified).
+  // Buka panel kirim credential untuk satu order.
+  // Order baru (ada subdomain booking) → mode 1-klik, tanpa input.
+  // Order lama (tanpa subdomain) → mode legacy, isi manual subdomain + password.
   function openCred(o: Order) {
     closeMenu();
     setCredMsg(null);
     const existing = clients.find((c) => c.order_id === o.order_id);
     setCredForm({
-      access_url: existing?.access_url ?? "",
+      access_url: existing?.access_url ?? (o.subdomain ? `https://${o.subdomain}.malika.ai` : ""),
       email: existing?.email || o.email,
       password: "",
     });
@@ -295,16 +306,21 @@ export default function AdminPage() {
     setCredSending(true);
     setCredMsg(null);
     try {
+      // Aturan tegas: 1-klik bila order punya subdomain DAN admin tidak
+      // mengisi password manual. Order lama tanpa subdomain → wajib isi manual.
+      const useOneClick = !!o.subdomain && !credForm.password;
       const res = await fetch("/api/clients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_name: o.nama,
-          access_url: credForm.access_url,
-          email: credForm.email,
-          password: credForm.password,
-          order_id: o.order_id,
-        }),
+        body: useOneClick
+          ? JSON.stringify({ order_id: o.order_id })
+          : JSON.stringify({
+              client_name: o.nama,
+              access_url: credForm.access_url || (o.subdomain ? `https://${o.subdomain}.malika.ai` : ""),
+              email: credForm.email,
+              password: credForm.password,
+              order_id: o.order_id,
+            }),
       });
       const data = (await res.json()) as {
         ok?: boolean;
@@ -312,15 +328,21 @@ export default function AdminPage() {
         error?: string;
         email_status?: string;
         email_error?: string;
+        access_url?: string;
+        email?: string;
+        password?: string;
       };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      const finalUrl = data.access_url ?? credForm.access_url;
+      const finalEmail = data.email ?? credForm.email;
+      const finalPass = data.password ?? credForm.password;
       setClients((cs) => [
         {
           id: data.id ?? 0,
           order_id: o.order_id,
           client_name: o.nama,
-          access_url: credForm.access_url,
-          email: credForm.email,
+          access_url: finalUrl,
+          email: finalEmail,
           email_status: data.email_status ?? "sent",
           created_at: new Date().toISOString(),
         },
@@ -329,7 +351,7 @@ export default function AdminPage() {
       // Tampilkan detail yang baru dikirim di bawah order.
       setSentCred((s) => ({
         ...s,
-        [o.order_id]: { access_url: credForm.access_url, email: credForm.email, password: credForm.password },
+        [o.order_id]: { access_url: finalUrl, email: finalEmail, password: finalPass },
       }));
       setCredForm((f) => ({ ...f, password: "" }));
       setCredMsg(
@@ -359,12 +381,12 @@ export default function AdminPage() {
 
   const isAdmin = !!me && (me.is_admin || me.division === "admin");
   const canLogs = !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer", "retensi", "bisdev"].includes(me.division));
-  const tabs = (["orders", "pricing", "logs", "promos", "users"] as const).filter((v) => {
+  const tabs = (["orders", "pricing", "logs", "promos", "affiliate", "users"] as const).filter((v) => {
     if (v === "orders" || v === "logs") return v === "orders" ? true : canLogs;
     return isAdmin;
   });
   const tabLabel = (v: string): string =>
-    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : "Staff";
+    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : v === "affiliate" ? "Affiliate" : "Staff";
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
@@ -407,6 +429,8 @@ export default function AdminPage() {
         <PaymentLogs />
       ) : view === "promos" && isAdmin ? (
         <PromoManager />
+      ) : view === "affiliate" && isAdmin ? (
+        <AffiliateManager />
       ) : view === "users" && isAdmin ? (
         <UsersManager meUsername={me?.username ?? ""} />
       ) : (
@@ -479,6 +503,9 @@ export default function AdminPage() {
                   <td className="px-4 py-3">
                     <p className="font-semibold">{o.product}</p>
                     <p className="font-mono text-[11px] text-stone-400">{o.order_id.slice(0, 8)}…</p>
+                    {o.subdomain && (
+                      <p className="font-mono text-[11px] font-semibold text-teal-700">{o.subdomain}.malika.ai</p>
+                    )}
                     <p className="text-[11px] text-stone-400">
                       {o.method === "transfer" ? "Transfer Bank" : o.method === "qris" ? "QRIS" : "-"} ·{" "}
                       {o.created_at ? new Date(o.created_at).toLocaleString("id-ID") : "-"}
@@ -516,16 +543,16 @@ export default function AdminPage() {
                     >
                       {STATUS_LABEL[o.status] ?? o.status}
                     </span>
-                    {(o.status === "verified" || o.status === "setup_server") && canOnboard(me) && (
+                    {(o.status === "verified" || o.status === "setup_server" || o.status === "onboard") && canGreet(me) && (
                       <button
-                        onClick={() => setOnboard(o.order_id, !o.onboard_done)}
+                        onClick={() => setGreeting(o.order_id, !(o.greeting_done || o.onboard_done))}
                         disabled={updating === o.order_id}
-                        title="Tandai onboarding selesai (berjalan paralel dengan setup)"
+                        title="Tandai sudah menyapa customer baru (berjalan paralel dengan setup)"
                         className={`mt-1 block rounded-full px-2 py-0.5 text-[11px] font-semibold disabled:opacity-60 ${
-                          o.onboard_done ? "bg-teal-100 text-teal-800" : "bg-white/70 text-stone-500 ring-1 ring-white hover:bg-white"
+                          o.greeting_done || o.onboard_done ? "bg-teal-100 text-teal-800" : "bg-white/70 text-stone-500 ring-1 ring-white hover:bg-white"
                         }`}
                       >
-                        {o.onboard_done ? "✓ Onboard selesai" : "○ Onboard?"}
+                        {o.greeting_done || o.onboard_done ? "✓ Sudah disapa" : "○ Sapa?"}
                       </button>
                     )}
                     {(o.status === "retensi" || o.status === "resubscribe" || o.status === "churn") && (
@@ -582,12 +609,31 @@ export default function AdminPage() {
                                 </button>
                                 <button
                                   onClick={() => {
+                                    void setStatus(o.order_id, "onboard");
+                                  }}
+                                  disabled={updating === o.order_id}
+                                  className="rounded-full bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                                >
+                                  ✓ Setup selesai → Onboard
+                                </button>
+                              </>
+                            )}
+                            {o.status === "onboard" && canFinishOnboard(me) && (
+                              <>
+                                <button
+                                  onClick={() => openCred(o)}
+                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                                >
+                                  ✉ Kirim credential
+                                </button>
+                                <button
+                                  onClick={() => {
                                     void setStatus(o.order_id, "retensi");
                                   }}
                                   disabled={updating === o.order_id}
                                   className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                                 >
-                                  ✓ Selesai → Retensi
+                                  ✓ Onboard selesai → Retensi
                                 </button>
                               </>
                             )}
@@ -677,7 +723,8 @@ export default function AdminPage() {
                               value={credForm.access_url}
                               onChange={(e) => setCredForm((f) => ({ ...f, access_url: e.target.value }))}
                               placeholder="kopi.malika.ai"
-                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                              disabled={!!o.subdomain && !credForm.password}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400 disabled:bg-stone-100 disabled:text-stone-500"
                             />
                           </label>
                           <label className="block">
@@ -686,19 +733,32 @@ export default function AdminPage() {
                               value={credForm.email}
                               onChange={(e) => setCredForm((f) => ({ ...f, email: e.target.value }))}
                               type="email"
-                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                              disabled={!!o.subdomain && !credForm.password}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400 disabled:bg-stone-100 disabled:text-stone-500"
                             />
                           </label>
                           <label className="block">
-                            <span className="mb-1 block text-[11px] font-medium text-stone-500">Password</span>
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">
+                              Password {o.subdomain ? "(kosongkan = 1-klik generate)" : "(wajib — order lama)"}
+                            </span>
                             <input
                               value={credForm.password}
                               onChange={(e) => setCredForm((f) => ({ ...f, password: e.target.value }))}
-                              placeholder="min. 8 karakter"
+                              placeholder={o.subdomain ? "kosongkan untuk 1-klik" : "min. 8 karakter"}
                               className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
                             />
                           </label>
                         </div>
+                        {o.subdomain && !credForm.password && (
+                          <p className="mt-2 rounded-xl bg-teal-50 px-3 py-2 text-xs font-medium text-teal-800 ring-1 ring-teal-100">
+                            Mode 1-klik: kirim ke {o.email} via https://{o.subdomain}.malika.ai — password agent digenerate otomatis. Isi password di atas hanya bila mau override manual (order lama).
+                          </p>
+                        )}
+                        {!o.subdomain && (
+                          <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
+                            Order lama tanpa booking subdomain — wajib isi URL + email + password manual.
+                          </p>
+                        )}
                         {credFor === o.order_id && credMsg && (
                           <p className="mt-2 text-xs font-medium text-stone-600">{credMsg}</p>
                         )}
@@ -707,7 +767,7 @@ export default function AdminPage() {
                           disabled={credSending}
                           className="malika-gradient mt-3 rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
                         >
-                          {credSending ? "Mengirim…" : "✉ Simpan + kirim email credential"}
+                          {credSending ? "Mengirim…" : o.subdomain && !credForm.password ? "✉ Kirim credential (1-klik)" : "✉ Simpan + kirim email credential"}
                         </button>
                       </div>
                     </td>
@@ -744,6 +804,9 @@ function UsersManager({ meUsername }: { meUsername: string }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState({ username: "", password: "", name: "", division: "support", is_admin: false });
+  const [editing, setEditing] = useState<StaffUser | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", division: "support", is_admin: false, active: true });
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -814,6 +877,46 @@ function UsersManager({ meUsername }: { meUsername: string }) {
       setMsg(`Password ${u.username} diperbarui.`);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Gagal update.");
+    }
+  }
+
+  function startEdit(u: StaffUser) {
+    setEditing(u);
+    setMsg(null);
+    setEditForm({
+      name: u.name,
+      division: u.division,
+      is_admin: !!u.is_admin,
+      active: !!u.active,
+    });
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editing) return;
+    setEditSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editing.id,
+          name: editForm.name,
+          division: editForm.division,
+          is_admin: editForm.is_admin,
+          active: editForm.active,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setEditing(null);
+      setMsg(`Staff ${editing.username} diperbarui.`);
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan perubahan.");
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -894,7 +997,10 @@ function UsersManager({ meUsername }: { meUsername: string }) {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      <button onClick={() => startEdit(u)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
+                        Edit
+                      </button>
                       <button onClick={() => toggleActive(u)} disabled={u.username === meUsername} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white disabled:opacity-40">
                         {u.active ? "Nonaktifkan" : "Aktifkan"}
                       </button>
@@ -912,6 +1018,44 @@ function UsersManager({ meUsername }: { meUsername: string }) {
           </table>
         )}
       </div>
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4 backdrop-blur-sm" onClick={() => setEditing(null)}>
+          <div className="glass-strong w-full max-w-md rounded-3xl p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-teal-700">Edit staff</p>
+                <h3 className="mt-1 text-lg font-bold">@{editing.username}</h3>
+              </div>
+              <button onClick={() => setEditing(null)} className="rounded-lg bg-white/70 px-2.5 py-1 text-sm ring-1 ring-white hover:bg-white" aria-label="Tutup">✕</button>
+            </div>
+            <form onSubmit={saveEdit} className="mt-4 space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Nama</span>
+                <input value={editForm.name} onChange={(e) => setEditForm((s) => ({ ...s, name: e.target.value }))} className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Divisi</span>
+                <select value={editForm.division} onChange={(e) => setEditForm((s) => ({ ...s, division: e.target.value }))} className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400">
+                  {DIVISIONS.map((d) => (
+                    <option key={d} value={d}>{DIVISION_LABEL[d] ?? d}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+                <input type="checkbox" checked={editForm.is_admin} disabled={editing.username === meUsername && !editForm.is_admin} onChange={(e) => setEditForm((s) => ({ ...s, is_admin: e.target.checked }))} className="h-4 w-4 accent-teal-600" />
+                Admin (akses penuh)
+              </label>
+              <label className="flex items-center gap-2 text-xs font-semibold text-stone-600">
+                <input type="checkbox" checked={editForm.active} disabled={editing.username === meUsername && !editForm.active} onChange={(e) => setEditForm((s) => ({ ...s, active: e.target.checked }))} className="h-4 w-4 accent-teal-600" />
+                Akun aktif
+              </label>
+              <button type="submit" disabled={editSaving} className="malika-gradient w-full rounded-full py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+                {editSaving ? "Menyimpan…" : "Simpan perubahan"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1067,6 +1211,7 @@ function PromoManager() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState({ code: "", type: "percent", value: "", max_uses: "", expires_at: "", active: true });
+  const [editing, setEditing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1106,6 +1251,7 @@ function PromoManager() {
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
       setForm({ code: "", type: "percent", value: "", max_uses: "", expires_at: "", active: true });
+      setEditing(null);
       setMsg("Kode promo tersimpan — langsung bisa dipakai saat checkout.");
       void load();
     } catch (err) {
@@ -1113,6 +1259,25 @@ function PromoManager() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function startEdit(p: PromoRow) {
+    setEditing(p.code);
+    setMsg(null);
+    setForm({
+      code: p.code,
+      type: p.type,
+      value: String(p.value),
+      max_uses: String(p.max_uses || ""),
+      expires_at: (p.expires_at ?? "").slice(0, 10),
+      active: !!p.active,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setForm({ code: "", type: "percent", value: "", max_uses: "", expires_at: "", active: true });
   }
 
   async function toggle(p: PromoRow) {
@@ -1153,11 +1318,11 @@ function PromoManager() {
         <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
       )}
       <form onSubmit={submit} className="glass-strong rounded-3xl p-6">
-        <h2 className="text-base font-bold">Buat / update kode promo</h2>
+        <h2 className="text-base font-bold">{editing ? `Edit kode ${editing}` : "Buat / update kode promo"}</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-stone-500">Kode</span>
-            <input value={form.code} onChange={set("code")} placeholder="cth. HEMAT20" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400" />
+            <input value={form.code} onChange={set("code")} disabled={!!editing} placeholder="cth. HEMAT20" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm uppercase outline-none focus:border-teal-400 disabled:bg-stone-100 disabled:text-stone-400" />
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-stone-500">Tipe</span>
@@ -1184,8 +1349,13 @@ function PromoManager() {
           </label>
         </div>
         <button type="submit" disabled={saving} className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
-          {saving ? "Menyimpan…" : "Simpan kode promo"}
+          {saving ? "Menyimpan…" : editing ? `Simpan perubahan ${editing}` : "Simpan kode promo"}
         </button>
+        {editing && (
+          <button type="button" onClick={cancelEdit} className="ml-2 mt-4 rounded-full bg-white/70 px-6 py-2 text-sm font-semibold ring-1 ring-white hover:bg-white">
+            Batal edit
+          </button>
+        )}
       </form>
 
       <div className="glass-strong overflow-x-auto rounded-3xl">
@@ -1219,6 +1389,9 @@ function PromoManager() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5">
+                      <button onClick={() => startEdit(p)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
+                        Edit
+                      </button>
                       <button onClick={() => toggle(p)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
                         {p.active ? "Nonaktifkan" : "Aktifkan"}
                       </button>
@@ -1226,6 +1399,267 @@ function PromoManager() {
                         Hapus
                       </button>
                     </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface AffTierRow {
+  id: number;
+  min_referrals: number;
+  budget_percent: number;
+  active: number;
+  created_at: string;
+}
+
+interface AffCodeRow {
+  code: string;
+  customer_id: number;
+  email: string;
+  discount_percent: number;
+  commission_percent: number;
+  active: number;
+  created_at: string;
+}
+
+interface AffRefRow {
+  id: number;
+  code: string;
+  order_id: string;
+  discount_amount: number;
+  commission_amount: number;
+  status: string;
+  created_at: string;
+}
+
+function AffiliateManager() {
+  const [tiers, setTiers] = useState<AffTierRow[]>([]);
+  const [codes, setCodes] = useState<AffCodeRow[]>([]);
+  const [refs, setRefs] = useState<AffRefRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [tForm, setTForm] = useState({ min_referrals: "", budget_percent: "" });
+  const [editingTier, setEditingTier] = useState<AffTierRow | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [tr, af] = await Promise.all([
+        fetch("/api/affiliate-tiers?all=1").then((r) => (r.ok ? r.json() : null)),
+        fetch("/api/affiliate?all=1").then((r) => (r.ok ? r.json() : null)),
+      ]);
+      setTiers((tr as { tiers?: AffTierRow[] } | null)?.tiers ?? []);
+      setCodes((af as { codes?: AffCodeRow[] } | null)?.codes ?? []);
+      setRefs((af as { referrals?: AffRefRow[] } | null)?.referrals ?? []);
+    } catch {
+      setMsg("Gagal memuat data affiliate.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function saveTier(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/affiliate-tiers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(editingTier ? { id: editingTier.id } : {}),
+          min_referrals: Number(tForm.min_referrals),
+          budget_percent: Number(tForm.budget_percent),
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setTForm({ min_referrals: "", budget_percent: "" });
+      setEditingTier(null);
+      setMsg("Tier tersimpan.");
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan tier.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEditTier(t: AffTierRow) {
+    setEditingTier(t);
+    setTForm({ min_referrals: String(t.min_referrals), budget_percent: String(t.budget_percent) });
+  }
+
+  async function removeTier(id: number) {
+    if (!window.confirm("Hapus tier ini?")) return;
+    try {
+      const res = await fetch(`/api/affiliate-tiers?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("gagal");
+      void load();
+    } catch {
+      setMsg("Gagal menghapus tier.");
+    }
+  }
+
+  async function markPaid(r: AffRefRow) {
+    const next = r.status === "paid" ? "payable" : "paid";
+    try {
+      const res = await fetch("/api/affiliate", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referral_id: r.id, status: next }),
+      });
+      if (!res.ok) throw new Error("gagal");
+      setRefs((xs) => xs.map((x) => (x.id === r.id ? { ...x, status: next } : x)));
+    } catch {
+      setMsg("Gagal update status komisi.");
+    }
+  }
+
+  const totalPayable = refs.filter((r) => r.status !== "paid").reduce((a, r) => a + r.commission_amount, 0);
+  const totalPaid = refs.filter((r) => r.status === "paid").reduce((a, r) => a + r.commission_amount, 0);
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      <form onSubmit={saveTier} className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">
+          {editingTier ? `Edit tier (≥ ${editingTier.min_referrals} referral)` : "Tambah tier jatah affiliate"}
+        </h2>
+        <p className="mt-1 text-xs text-stone-500">
+          Jatah = total % yang dibagi referrer menjadi diskon teman + komisi. Contoh: 0+ referral → 10%, 20+ → 15%, 50+ → 20%.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Min. referral</span>
+            <input value={tForm.min_referrals} onChange={(e) => setTForm((s) => ({ ...s, min_referrals: e.target.value }))} type="number" min={0} placeholder="cth. 20" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-500">Jatah budget (%)</span>
+            <input value={tForm.budget_percent} onChange={(e) => setTForm((s) => ({ ...s, budget_percent: e.target.value }))} type="number" min={0} max={100} placeholder="cth. 15" className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400" />
+          </label>
+        </div>
+        <button type="submit" disabled={saving} className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+          {saving ? "Menyimpan…" : editingTier ? "Simpan perubahan" : "Tambah tier"}
+        </button>
+        {editingTier && (
+          <button type="button" onClick={() => { setEditingTier(null); setTForm({ min_referrals: "", budget_percent: "" }); }} className="ml-2 mt-4 rounded-full bg-white/70 px-6 py-2 text-sm font-semibold ring-1 ring-white hover:bg-white">
+            Batal edit
+          </button>
+        )}
+      </form>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        <p className="px-4 pt-4 text-sm font-bold">Tier aktif ({tiers.length})</p>
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat…</p>
+        ) : tiers.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada tier — tambah tier pertama di atas.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Min. referral</th>
+                <th className="px-4 py-3 font-semibold">Jatah</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tiers.map((t) => (
+                <tr key={t.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3 font-semibold">≥ {t.min_referrals}</td>
+                  <td className="px-4 py-3 text-teal-700 font-bold">{t.budget_percent}%</td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1.5">
+                      <button onClick={() => startEditTier(t)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">Edit</button>
+                      <button onClick={() => removeTier(t.id)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold text-stone-500 ring-1 ring-white hover:bg-red-50 hover:text-red-600">Hapus</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-4">
+          <p className="text-sm font-bold">Kode affiliate ({codes.length})</p>
+          <p className="text-xs text-stone-500">Menunggu cair {formatRp(totalPayable)} · Sudah cair {formatRp(totalPaid)}</p>
+        </div>
+        {codes.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada kode affiliate.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Kode</th>
+                <th className="px-4 py-3 font-semibold">Pemilik</th>
+                <th className="px-4 py-3 font-semibold">Split</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {codes.map((cd) => {
+                const mine = refs.filter((r) => r.code === cd.code);
+                const n = mine.length;
+                return (
+                  <tr key={cd.code} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                    <td className="px-4 py-3 font-mono font-bold">{cd.code}</td>
+                    <td className="px-4 py-3 text-xs">{cd.email} · {n} referral</td>
+                    <td className="px-4 py-3 text-xs">diskon {cd.discount_percent}% + komisi {cd.commission_percent}%</td>
+                    <td className="px-4 py-3 text-xs text-stone-400">{cd.active ? "Aktif" : "Nonaktif"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        <p className="px-4 pt-4 text-sm font-bold">Referral & komisi ({refs.length})</p>
+        {refs.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada referral terverifikasi.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Kode</th>
+                <th className="px-4 py-3 font-semibold">Order</th>
+                <th className="px-4 py-3 font-semibold">Komisi</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {refs.map((r) => (
+                <tr key={r.id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3 font-mono font-bold">{r.code}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{r.order_id.slice(0, 8)}…</td>
+                  <td className="px-4 py-3 font-bold text-teal-700">{formatRp(r.commission_amount)}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${r.status === "paid" ? "bg-teal-100 text-teal-800" : "bg-amber-100 text-amber-800"}`}>
+                      {r.status === "paid" ? "Cair" : "Menunggu"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => markPaid(r)} className="rounded-full bg-white/70 px-3 py-1.5 text-[11px] font-semibold ring-1 ring-white hover:bg-white">
+                      {r.status === "paid" ? "Batalkan cair" : "Tandai cair"}
+                    </button>
                   </td>
                 </tr>
               ))}

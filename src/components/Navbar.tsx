@@ -46,7 +46,13 @@ export default function Navbar() {
                 </a>
               ))}
             </nav>
-            <div className="hidden items-center md:flex">
+            <div className="hidden items-center gap-1 md:flex">
+              <a
+                href="/customer/login"
+                className="rounded-full px-4 py-2.5 text-sm font-medium text-stone-600 hover:bg-white/70 hover:text-stone-950"
+              >
+                Login
+              </a>
               <a
                 href="#harga"
                 className="malika-gradient rounded-full px-5 py-2.5 text-sm font-medium text-white hover:opacity-90"
@@ -103,9 +109,16 @@ export default function Navbar() {
                 </ul>
                 <div className="mt-1 border-t border-white/70 p-2">
                   <a
+                    href="/customer/login"
+                    onClick={() => setOpen(false)}
+                    className="block rounded-2xl px-3 py-3 text-center text-[15px] font-semibold text-stone-700 transition hover:bg-white"
+                  >
+                    Login Customer
+                  </a>
+                  <a
                     href="#harga"
                     onClick={() => setOpen(false)}
-                    className="malika-gradient block rounded-2xl px-3 py-3 text-center text-[15px] font-semibold text-white transition hover:opacity-90"
+                    className="malika-gradient mt-1 block rounded-2xl px-3 py-3 text-center text-[15px] font-semibold text-white transition hover:opacity-90"
                   >
                     Mulai Sekarang
                   </a>
