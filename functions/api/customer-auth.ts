@@ -34,7 +34,7 @@ export interface CustomerSession {
 }
 
 export const CUSTOMER_COOKIE = "malika_customer";
-const CUSTOMER_TTL = 30 * 24 * 3600; // detik (30 hari)
+export const CUSTOMER_TTL = 30 * 24 * 3600; // detik (30 hari)
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -52,11 +52,11 @@ async function hmacHex(secret: string, msg: string): Promise<string> {
   return hex(sig);
 }
 
-function secretOf(env: Env): string {
+export function secretOf(env: Env): string {
   return env.CUSTOMER_SESSION_SECRET ?? env.SESSION_SECRET ?? "";
 }
 
-async function signCustomer(secret: string, c: CustomerSession): Promise<string> {
+export async function signCustomerSession(secret: string, c: CustomerSession): Promise<string> {
   const exp = Math.floor(Date.now() / 1000) + CUSTOMER_TTL;
   const randBytes = crypto.getRandomValues(new Uint8Array(16));
   const rand = [...randBytes].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -64,7 +64,7 @@ async function signCustomer(secret: string, c: CustomerSession): Promise<string>
   return `${body}.${await hmacHex(secret, body)}`;
 }
 
-function customerCookie(token: string, maxAge: number): string {
+export function customerCookie(token: string, maxAge: number): string {
   return `${CUSTOMER_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 }
 
@@ -154,7 +154,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       .catch(() => null)) as { meta?: { last_row_id?: number } } | null;
     if (!res?.meta?.last_row_id) return fail();
     row = { id: res.meta.last_row_id, email, pass_hash: await sha256Hex(password), name: ord.nama || email };
-    const token = await signCustomer(secret, { cid: row.id, email });
+    const token = await signCustomerSession(secret, { cid: row.id, email });
     return Response.json(
       { ok: true, customer: { email: row.email, name: row.name }, claimed: true },
       { headers: { ...cors, "Set-Cookie": customerCookie(token, CUSTOMER_TTL) } }
@@ -167,7 +167,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   if (wait) await new Promise((r) => setTimeout(r, wait));
   if (!ok) return fail();
 
-  const token = await signCustomer(secret, { cid: row.id, email: row.email.toLowerCase() });
+  const token = await signCustomerSession(secret, { cid: row.id, email: row.email.toLowerCase() });
   return Response.json(
     { ok: true, customer: { email: row.email, name: row.name } },
     { headers: { ...cors, "Set-Cookie": customerCookie(token, CUSTOMER_TTL) } }
@@ -194,4 +194,26 @@ export async function onRequestDelete() {
     { ok: true },
     { headers: { ...cors, "Set-Cookie": customerCookie("expired", 0) } }
   );
+}
+
+// PUT /api/customer-auth {password} — set/ubah password (harus login).
+// Dipakai setelah magic link pertama (klaim) dan untuk ganti password.
+export async function onRequestPut({ request, env }: { request: Request; env: Env }) {
+  if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
+  const c = await getCustomerSession(request, env);
+  if (!c) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  let body: { password?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return Response.json({ error: "invalid json" }, { status: 400, headers: cors });
+  }
+  const password = String(body.password ?? "");
+  if (password.length < 8) {
+    return Response.json({ error: "Password minimal 8 karakter." }, { status: 400, headers: cors });
+  }
+  await env.DB.prepare("UPDATE customers SET pass_hash = ? WHERE id = ?")
+    .bind(await sha256Hex(password), c.cid)
+    .run();
+  return Response.json({ ok: true }, { headers: cors });
 }

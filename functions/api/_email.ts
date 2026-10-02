@@ -143,3 +143,24 @@ export function accountReadyMail(c: {
     text: `Halo ${c.client_name},\n\nServer Malika Agent kamu sudah siap.\n\nURL akses: ${c.access_url}\nEmail: ${c.email}\nPassword: ${c.password}\n\nPanduan onboarding terlampir di email ini.\nDokumentasi lengkap: ${DOCS_URL}\n\nSimpan baik-baik dan jangan bagikan ke siapa pun.\n\nMalika Agent`,
   };
 }
+
+export function magicLinkMail(o: {
+  nama: string;
+  link: string;
+  expiry_menit: number;
+}): { subject: string; html: string; text: string } {
+  const subject = `Link login portal Malika Agent`;
+  const inner = `
+    <p>Halo ${o.nama},</p>
+    <p>Klik tombol di bawah untuk masuk ke portal customer Malika Agent (lihat langganan & Malika Agent kamu):</p>
+    <p style="text-align:center;margin:20px 0">
+      <a href="${o.link}" style="display:inline-block;background:#0d9488;color:#fff!important;text-decoration:none;font-weight:bold;padding:12px 28px;border-radius:999px">Masuk ke Portal →</a>
+    </p>
+    <p style="font-size:12px;color:#888">Atau salin link ini ke browser:<br><code>${o.link}</code></p>
+    <p>Link ini hanya bisa dipakai <strong>sekali</strong> dan berlaku <strong>${o.expiry_menit} menit</strong>. Jangan bagikan ke siapa pun. Kalau kamu tidak meminta link ini, abaikan email ini.</p>`;
+  return {
+    subject,
+    html: WRAP(inner),
+    text: `Halo ${o.nama},\n\nKlik link ini untuk masuk ke portal customer Malika Agent:\n${o.link}\n\nLink hanya bisa dipakai sekali dan berlaku ${o.expiry_menit} menit. Jangan bagikan ke siapa pun.\n\nMalika Agent`,
+  };
+}
