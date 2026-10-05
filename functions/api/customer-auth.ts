@@ -56,11 +56,36 @@ export function secretOf(env: Env): string {
   return env.CUSTOMER_SESSION_SECRET ?? env.SESSION_SECRET ?? "";
 }
 
+/* Email di dalam token sesi di-encode base64url agar tidak mengandung "."
+   (pemisah segmen token). encodeURIComponent TIDAK meng-encode titik,
+   sehingga email seperti nama@gmail.com memecah split(".") jadi 6 segmen
+   dan semua sesi customer gagal terverifikasi (401 unauthorized). */
+function encEmail(email: string): string {
+  const bytes = new TextEncoder().encode(email);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+function decEmail(s: string): string | null {
+  if (!s || !/^[A-Za-z0-9_-]+$/.test(s)) return null;
+  let b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4) b64 += "=";
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 export async function signCustomerSession(secret: string, c: CustomerSession): Promise<string> {
   const exp = Math.floor(Date.now() / 1000) + CUSTOMER_TTL;
   const randBytes = crypto.getRandomValues(new Uint8Array(16));
   const rand = [...randBytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-  const body = `${exp.toString(16)}.${rand}.${c.cid}.${encodeURIComponent(c.email)}`;
+  const body = `${exp.toString(16)}.${rand}.${c.cid}.${encEmail(c.email)}`;
   return `${body}.${await hmacHex(secret, body)}`;
 }
 
@@ -76,17 +101,18 @@ export async function getCustomerSession(req: Request, env: Env): Promise<Custom
   if (!m) return null;
   const parts = decodeURIComponent(m[1]).split(".");
   if (parts.length !== 5) return null;
-  const [expHex, rand, cidStr, emailEnc, sig] = parts;
+  const [expHex, rand, cidStr, emailB64, sig] = parts;
   const exp = parseInt(expHex, 16);
   if (!Number.isFinite(exp) || exp < Date.now() / 1000) return null;
   if (!/^[0-9a-f]{32}$/.test(rand)) return null;
   if (!/^\d+$/.test(cidStr)) return null;
-  const want = await hmacHex(secret, `${expHex}.${rand}.${cidStr}.${emailEnc}`);
+  const want = await hmacHex(secret, `${expHex}.${rand}.${cidStr}.${emailB64}`);
   if (want.length !== sig.toLowerCase().length) return null;
   let diff = 0;
   for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ sig.toLowerCase().charCodeAt(i);
   if (diff !== 0) return null;
-  const email = decodeURIComponent(emailEnc).toLowerCase();
+  const email = decEmail(emailB64)?.toLowerCase() ?? "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
   const row = await env.DB.prepare("SELECT email FROM customers WHERE id = ?")
     .bind(Number(cidStr))
     .first<{ email: string }>()

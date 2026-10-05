@@ -2,7 +2,7 @@
    File underscore = tidak jadi route, hanya untuk diimpor.
    Env yang dibutuhkan (Pages > Settings > Environment variables):
      RESEND_API_KEY — wajib
-     RESEND_FROM    — opsional, default "Malika Agent <halo@malika.ai>"
+     RESEND_FROM    — opsional, default "Malika Agent <noreply@malikaagent.my.id>"
 */
 
 export interface EnvWithMail {

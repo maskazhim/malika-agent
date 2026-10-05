@@ -114,11 +114,17 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       .catch(() => null));
   const origin = new URL(request.url).origin;
   const link = `${origin}/customer/login/verify?token=${token}`;
-  await sendMail(env, {
+  const mail = await sendMail(env, {
     to: email,
     ...magicLinkMail({ nama: who?.name || email, link, expiry_menit: EXPIRY_MIN }),
   });
   // Sengaja tidak membocorkan status kirim email (anti enumeration).
+  // Log server-side agar kegagalan Resend bisa ditelusuri di Pages Logs.
+  if (mail.ok) {
+    console.log(`[customer-magic] magic link terkirim ke ${email}`);
+  } else {
+    console.error(`[customer-magic] GAGAL kirim ke ${email}: ${mail.error}`);
+  }
   return Response.json(GENERIC_OK, { headers: cors });
 }
 
