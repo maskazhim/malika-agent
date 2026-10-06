@@ -33,6 +33,40 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Batal",
 };
 
+/* Shortcut 4 layanan Malika per langganan.
+   Sumber utama: tabel deploy_configs (ditulis otomatisasi deploy eksternal),
+   kolom web_domain (agent), router_domain, connector_domain, gowa_domain.
+   Bila kolom/baris kosong (mis. gowa yang masih rencana), fallback derive
+   `{prefix}-{base}.malika.ai` dengan base = short_name, else orders.subdomain. */
+export interface ServiceLink {
+  key: "agent" | "router" | "connector" | "gowa";
+  label: string;
+  url: string;
+}
+
+const SERVICES: { key: ServiceLink["key"]; label: string; column: string }[] = [
+  { key: "agent", label: "Malika Agent", column: "web_domain" },
+  { key: "router", label: "Router", column: "router_domain" },
+  { key: "connector", label: "Connector", column: "connector_domain" },
+  { key: "gowa", label: "Gowa", column: "gowa_domain" },
+];
+
+function toHttps(raw: unknown): string {
+  const h = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  if (!h || !h.includes(".")) return "";
+  return `https://${h}`;
+}
+
+function derivedUrl(base: string, prefix: string): string {
+  const b = String(base ?? "").trim().toLowerCase();
+  if (!b) return "";
+  return `https://${prefix}-${b}.malika.ai`;
+}
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
 }
@@ -80,20 +114,50 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     renewal_count: number;
   }[];
 
-  // Lengkapi access_url dari tabel clients (kalau credential sudah dikirim).
+  // Lengkapi access_url dari tabel clients (kalau credential sudah dikirim)
+  // + 4 shortcut layanan dari tabel deploy_configs (keyed by order_id).
   const out = await Promise.all(
     orders.map(async (o) => {
       const cl = await env.DB.prepare("SELECT access_url, email_status FROM clients WHERE order_id = ?")
         .bind(o.order_id)
         .first<{ access_url: string; email_status: string }>()
         .catch(() => null);
+      // deploy_configs belum ada di DB lama → catch jadi null, fallback ke derive.
+      const dep = await env.DB.prepare(
+        "SELECT short_name, web_domain, connector_domain, router_domain, gowa_domain, deploy_status FROM deploy_configs WHERE order_id = ?"
+      )
+        .bind(o.order_id)
+        .first<{
+          short_name: string;
+          web_domain: string;
+          connector_domain: string;
+          router_domain: string;
+          gowa_domain: string;
+          deploy_status: string;
+        }>()
+        .catch(() => null);
       const access_url = cl?.access_url ?? (o.subdomain ? `https://${o.subdomain}.malika.ai` : "");
+      const base = (dep?.short_name || o.subdomain || "").trim().toLowerCase();
+      const domains: Record<string, string> = {
+        web_domain: String(dep?.web_domain ?? ""),
+        router_domain: String(dep?.router_domain ?? ""),
+        connector_domain: String(dep?.connector_domain ?? ""),
+        gowa_domain: String(dep?.gowa_domain ?? ""),
+      };
+      const services: ServiceLink[] = SERVICES.map((s) => ({
+        key: s.key,
+        label: s.label,
+        url: toHttps(domains[s.column]) || derivedUrl(base, s.key),
+      }));
       return {
         ...o,
         status_label: STATUS_LABEL[o.status] ?? o.status,
         access_url,
         credential_sent: !!cl,
         active: ["retensi", "resubscribe", "onboard", "setup_server", "verified"].includes(o.status),
+        deploy_status: dep?.deploy_status ?? "",
+        short_name: dep?.short_name ?? "",
+        services,
       };
     })
   );

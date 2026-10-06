@@ -4,6 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
 
+interface ServiceLink {
+  key: string;
+  label: string;
+  url: string;
+}
+
 interface SubOrder {
   order_id: string;
   product: string;
@@ -21,6 +27,9 @@ interface SubOrder {
   access_url: string;
   credential_sent: boolean;
   active: boolean;
+  deploy_status: string;
+  short_name: string;
+  services: ServiceLink[];
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -39,6 +48,69 @@ function expiryOf(o: SubOrder): string {
   if (!o.retensi_at) return "-";
   const exp = new Date(new Date(o.retensi_at).getTime() + 30 * 864e5);
   return exp.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/* Shortcut 4 layanan Malika (Agent, Router, Connector, Gowa).
+   URL dari API (deploy_configs), fallback derive sudah dihitung di server.
+   Gowa yang masih rencana tetap tampil (URL derivasi). */
+function ServiceShortcuts({ services, deployStatus }: { services: ServiceLink[]; deployStatus: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  if (!services || services.length === 0) return null;
+  const deleted = deployStatus === "deleted";
+
+  function copy(url: string, key: string) {
+    navigator.clipboard?.writeText(url).catch(() => {});
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+      <p className="px-1 text-[11px] font-semibold uppercase tracking-widest text-teal-700">
+        Layanan Malika saya
+      </p>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {services.map((s) => (
+          <div key={s.key} className="rounded-xl bg-white/80 px-3 py-2 ring-1 ring-white">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-bold">{s.label}</p>
+              {deleted ? (
+                <span className="rounded-full bg-stone-200 px-2.5 py-0.5 text-[11px] font-semibold text-stone-500">
+                  Nonaktif
+                </span>
+              ) : s.url ? (
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-full bg-teal-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-teal-700"
+                >
+                  Buka →
+                </a>
+              ) : (
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                  Menyusul
+                </span>
+              )}
+            </div>
+            {s.url && !deleted ? (
+              <div className="mt-1 flex items-center gap-1.5">
+                <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-500">
+                  {s.url.replace(/^https?:\/\//, "")}
+                </code>
+                <button
+                  onClick={() => copy(s.url, s.key)}
+                  className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-white"
+                >
+                  {copied === s.key ? "✓" : "Salin"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function CustomerPage() {
@@ -198,6 +270,9 @@ export default function CustomerPage() {
                   </p>
                 )}
               </dl>
+              {(o.short_name || o.subdomain || (o.services ?? []).some((s) => s.url)) && (
+                <ServiceShortcuts services={o.services ?? []} deployStatus={o.deploy_status ?? ""} />
+              )}
               <div className="mt-4 flex flex-wrap gap-2">
                 {o.credential_sent && o.access_url ? (
                   <a
