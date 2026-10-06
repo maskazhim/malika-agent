@@ -192,6 +192,12 @@ export function canManageCatalog(s: Session): boolean {
   return s.is_admin || s.division === "admin";
 }
 
+/* Lihat/ubah deploy_configs: pelaksana setup + admin. */
+export function canEditConfig(s: Session): boolean {
+  if (s.is_admin || s.division === "admin") return true;
+  return ["it", "ai_engineer", "support"].includes(s.division);
+}
+
 /* Lihat log pembayaran: pelaksana + retensi + bisdev + admin. */
 export function canViewLogs(s: Session): boolean {
   if (s.is_admin || s.division === "admin") return true;

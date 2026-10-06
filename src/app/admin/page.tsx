@@ -123,6 +123,77 @@ interface ClientAccess {
   subdomain?: string;
 }
 
+// Field deploy_configs yang bisa diedit via popup Config (dikelompokkan).
+type CfgKind = "text" | "check" | "area" | "view";
+const CFG_GROUPS: { title: string; fields: { key: string; label: string; kind: CfgKind }[] }[] = [
+  {
+    title: "Identitas",
+    fields: [
+      { key: "client_name", label: "Nama klien", kind: "text" },
+      { key: "short_name", label: "Short name", kind: "text" },
+      { key: "server_name", label: "Server name", kind: "text" },
+      { key: "project_name", label: "Project name", kind: "text" },
+      { key: "compose_name", label: "Compose name", kind: "text" },
+      { key: "environment_name", label: "Environment", kind: "text" },
+    ],
+  },
+  {
+    title: "Server",
+    fields: [
+      { key: "server_ip", label: "Server IP", kind: "text" },
+      { key: "server_user", label: "SSH user", kind: "text" },
+      { key: "ssh_port", label: "SSH port", kind: "text" },
+      { key: "ssh_key_ref", label: "SSH key ref", kind: "text" },
+    ],
+  },
+  {
+    title: "Domain",
+    fields: [
+      { key: "web_domain", label: "Web domain", kind: "text" },
+      { key: "connector_domain", label: "Connector domain", kind: "text" },
+      { key: "router_domain", label: "Router domain", kind: "text" },
+      { key: "gowa_domain", label: "Gowa domain", kind: "text" },
+      { key: "cloudflare_zone", label: "Cloudflare zone", kind: "text" },
+      { key: "letsencrypt_email", label: "LetsEncrypt email", kind: "text" },
+      { key: "proxy_awal", label: "Proxy awal (1 = proxied)", kind: "check" },
+    ],
+  },
+  {
+    title: "Compose",
+    fields: [
+      { key: "compose_provider", label: "Provider", kind: "text" },
+      { key: "compose_repo", label: "Repo", kind: "text" },
+      { key: "compose_branch", label: "Branch", kind: "text" },
+      { key: "compose_trigger", label: "Trigger", kind: "text" },
+      { key: "env_template", label: "Env template", kind: "text" },
+    ],
+  },
+  {
+    title: "Secrets",
+    fields: [
+      { key: "secrets_json", label: "secrets.json", kind: "area" },
+      { key: "secrets_is_dummy", label: "Secrets masih dummy", kind: "check" },
+    ],
+  },
+  {
+    title: "Dokploy",
+    fields: [
+      { key: "dokploy_server_id", label: "Server ID", kind: "text" },
+      { key: "dokploy_project_id", label: "Project ID", kind: "text" },
+      { key: "dokploy_env_id", label: "Env ID", kind: "text" },
+      { key: "dokploy_compose_id", label: "Compose ID", kind: "text" },
+    ],
+  },
+  {
+    title: "Status",
+    fields: [
+      { key: "deploy_status", label: "Deploy status", kind: "text" },
+      { key: "last_log", label: "Last log", kind: "view" },
+    ],
+  },
+];
+const CFG_KEYS = CFG_GROUPS.flatMap((g) => g.fields.map((f) => f.key));
+
 export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
@@ -143,6 +214,12 @@ export default function AdminPage() {
   const [credSending, setCredSending] = useState(false);
   const [credMsg, setCredMsg] = useState<string | null>(null);
   const [sentCred, setSentCred] = useState<Record<string, { access_url: string; email: string; password: string }>>({});
+  // Popup Config: edit deploy_configs per order.
+  const [cfgFor, setCfgFor] = useState<string | null>(null);
+  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
+  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgSaving, setCfgSaving] = useState(false);
+  const [cfgMsg, setCfgMsg] = useState<string | null>(null);
 
   const load = useCallback(
     async (status: string) => {
@@ -363,6 +440,62 @@ export default function AdminPage() {
       setCredMsg(err instanceof Error ? err.message : "Gagal mengirim credential.");
     } finally {
       setCredSending(false);
+    }
+  }
+
+  // Buka popup Config: muat deploy_configs order ini (atau form kosong bila belum ada).
+  async function openCfg(order_id: string) {
+    closeMenu();
+    setCfgMsg(null);
+    setCfgFor(order_id);
+    setCfgLoading(true);
+    try {
+      const res = await fetch(`/api/deploy-configs?order_id=${encodeURIComponent(order_id)}`);
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json()) as { ok?: boolean; config?: Record<string, unknown>; error?: string };
+      const f: Record<string, string> = {};
+      if (res.ok && data.config) {
+        for (const k of CFG_KEYS) f[k] = String(data.config[k] ?? "");
+      } else {
+        for (const k of CFG_KEYS) f[k] = "";
+        setCfgMsg("Belum ada config untuk order ini — isi lalu simpan untuk membuat baru.");
+      }
+      setCfgForm(f);
+    } catch {
+      const f: Record<string, string> = {};
+      for (const k of CFG_KEYS) f[k] = "";
+      setCfgForm(f);
+      setCfgMsg("Gagal memuat config.");
+    } finally {
+      setCfgLoading(false);
+    }
+  }
+
+  // Simpan popup Config ke D1.
+  async function saveCfg() {
+    if (!cfgFor) return;
+    setCfgSaving(true);
+    setCfgMsg(null);
+    try {
+      const res = await fetch("/api/deploy-configs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: cfgFor, ...cfgForm }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setCfgFor(null);
+    } catch (err) {
+      setCfgMsg(err instanceof Error ? err.message : "Gagal menyimpan config.");
+    } finally {
+      setCfgSaving(false);
     }
   }
 
@@ -609,6 +742,14 @@ export default function AdminPage() {
                                 </button>
                                 <button
                                   onClick={() => {
+                                    void openCfg(o.order_id);
+                                  }}
+                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                                >
+                                  ⚙ Config
+                                </button>
+                                <button
+                                  onClick={() => {
                                     void setStatus(o.order_id, "onboard");
                                   }}
                                   disabled={updating === o.order_id}
@@ -781,6 +922,94 @@ export default function AdminPage() {
         )}
       </div>
         </>
+      )}
+      {cfgFor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold">⚙ Config deploy — <span className="font-mono">{cfgFor}</span></p>
+              <button
+                onClick={() => {
+                  setCfgFor(null);
+                  setCfgMsg(null);
+                }}
+                className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-stone-200 hover:bg-stone-100"
+                aria-label="Tutup"
+              >
+                ✕
+              </button>
+            </div>
+            {cfgLoading ? (
+              <p className="mt-4 text-center text-sm text-stone-500">Memuat config…</p>
+            ) : (
+              <div className="mt-3 space-y-4">
+                {CFG_GROUPS.map((g) => (
+                  <div key={g.title} className="rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-stone-400">{g.title}</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {g.fields.map((f) =>
+                        f.kind === "check" ? (
+                          <label key={f.key} className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-stone-200">
+                            <input
+                              type="checkbox"
+                              checked={cfgForm[f.key] === "1"}
+                              onChange={(e) => setCfgForm((prev) => ({ ...prev, [f.key]: e.target.checked ? "1" : "0" }))}
+                              className="h-4 w-4 accent-teal-600"
+                            />
+                            <span className="text-xs font-medium text-stone-600">{f.label}</span>
+                          </label>
+                        ) : f.kind === "area" ? (
+                          <label key={f.key} className="block sm:col-span-2">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">{f.label}</span>
+                            <textarea
+                              value={cfgForm[f.key] ?? ""}
+                              onChange={(e) => setCfgForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              rows={3}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-teal-400"
+                            />
+                          </label>
+                        ) : f.kind === "view" ? (
+                          <div key={f.key} className="rounded-xl bg-stone-100 px-3 py-2 sm:col-span-2">
+                            <p className="text-[11px] font-medium text-stone-500">{f.label}</p>
+                            <p className="whitespace-pre-wrap font-mono text-xs text-stone-700">{cfgForm[f.key] || "-"}</p>
+                          </div>
+                        ) : (
+                          <label key={f.key} className="block">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">{f.label}</span>
+                            <input
+                              value={cfgForm[f.key] ?? ""}
+                              onChange={(e) => setCfgForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                            />
+                          </label>
+                        )
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {cfgMsg && <p className="mt-3 text-xs font-medium text-stone-600">{cfgMsg}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setCfgFor(null);
+                  setCfgMsg(null);
+                }}
+                className="rounded-full bg-white px-5 py-2 text-xs font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => void saveCfg()}
+                disabled={cfgLoading || cfgSaving}
+                className="malika-gradient rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+              >
+                {cfgSaving ? "Menyimpan…" : "Simpan config"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

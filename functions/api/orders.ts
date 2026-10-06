@@ -209,6 +209,36 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       .catch(() => {});
   }
 
+  // Skeleton deploy_configs saat checkout (best-effort).
+  // Kolom provisioning (server_ip, ssh_*, dokploy_*, secrets_*) diisi belakangan
+  // saat setup server — upsert di bawah tidak menyentuhnya.
+  {
+    const company = row.bisnis && row.bisnis !== "-" ? row.bisnis : row.nama;
+    const serverName = `Agentic - ${company}`.slice(0, 128);
+    const now = new Date().toISOString();
+    const web = subdomain ? `agent-${subdomain}.malika.ai` : "";
+    const connector = subdomain ? `connector-${subdomain}.malika.ai` : "";
+    const router = subdomain ? `router-${subdomain}.malika.ai` : "";
+    const gowa = subdomain ? `gowa-${subdomain}.malika.ai` : "";
+    await env.DB.prepare(
+      `INSERT INTO deploy_configs (order_id, client_name, short_name, server_name, project_name, web_domain, connector_domain, router_domain, gowa_domain, deploy_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+       ON CONFLICT(order_id) DO UPDATE SET
+         client_name=excluded.client_name,
+         short_name=excluded.short_name,
+         server_name=excluded.server_name,
+         project_name=excluded.project_name,
+         web_domain=CASE WHEN excluded.web_domain != '' THEN excluded.web_domain ELSE deploy_configs.web_domain END,
+         connector_domain=CASE WHEN excluded.connector_domain != '' THEN excluded.connector_domain ELSE deploy_configs.connector_domain END,
+         router_domain=CASE WHEN excluded.router_domain != '' THEN excluded.router_domain ELSE deploy_configs.router_domain END,
+         gowa_domain=CASE WHEN excluded.gowa_domain != '' THEN excluded.gowa_domain ELSE deploy_configs.gowa_domain END,
+         updated_at=excluded.updated_at`
+    )
+      .bind(order_id, row.nama, subdomain, serverName, serverName, web, connector, router, gowa, now, now)
+      .run()
+      .catch(() => {});
+  }
+
   return Response.json({ ok: true, order_id }, { headers: cors });
 }
 
