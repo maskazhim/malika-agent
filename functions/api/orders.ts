@@ -255,20 +255,70 @@ const KNOWN_STATUSES = [
 ];
 
 // PATCH /api/orders {order_id, status?, onboard_done?, greeting_done?} — staff sesuai matriks.
+// Bulk: {order_ids: [...maks 100], status?} — aturan izin yang sama per order,
+// hasil dilaporkan per item: {ok, results: [{order_id, ok, changed?, error?}]}.
 export async function onRequestPatch({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s: Session | null = await getSession(request, env);
   if (!s) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
-  let b: { order_id?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
+  let b: { order_id?: unknown; order_ids?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
   try {
-    b = (await request.json()) as { order_id?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
+    b = (await request.json()) as typeof b;
   } catch {
     return new Response(JSON.stringify({ error: "invalid json" }), { status: 400, headers: cors });
   }
+  const greetingVal = b.greeting_done !== undefined ? b.greeting_done : b.onboard_done;
+  const status = b.status !== undefined ? String(b.status) : "";
+
+  // Mode bulk: array order_ids.
+  if (b.order_ids !== undefined) {
+    const ids = (Array.isArray(b.order_ids) ? b.order_ids : [])
+      .map((v) => String(v ?? "").slice(0, 64))
+      .filter(Boolean)
+      .slice(0, 100);
+    if (ids.length === 0) return new Response(JSON.stringify({ error: "order_ids required" }), { status: 400, headers: cors });
+    // Bulk hanya untuk pindah status (flag greeting tetap satuan via UI).
+    if (!status) return new Response(JSON.stringify({ error: "status required untuk bulk" }), { status: 400, headers: cors });
+    if (!KNOWN_STATUSES.includes(status)) {
+      return new Response(JSON.stringify({ error: "status tidak valid" }), { status: 400, headers: cors });
+    }
+    const results = [];
+    for (const id of new Set(ids)) {
+      try {
+        const changed = await patchOneOrder(env, s, id, status, undefined);
+        results.push({ order_id: id, ok: true, changed });
+      } catch (e) {
+        const err = e as { status?: number; error?: string };
+        results.push({ order_id: id, ok: false, error: err?.error ?? "gagal" });
+      }
+    }
+    const updated = results.filter((r) => r.ok).length;
+    return Response.json({ ok: true, updated, failed: results.length - updated, results }, { headers: cors });
+  }
+
   const order_id = String(b.order_id ?? "").slice(0, 64);
   if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
+
+  try {
+    const changed = await patchOneOrder(env, s, order_id, status, greetingVal);
+    return Response.json({ ok: true, order_id, changed }, { headers: cors });
+  } catch (e) {
+    const err = e as { status?: number; error?: string };
+    return new Response(JSON.stringify({ error: err?.error ?? "gagal" }), { status: err?.status ?? 400, headers: cors });
+  }
+}
+
+/* Satu order di-patch (dipakai mode satuan & bulk).
+   Throw {status, error} bila gagal — caller yang menerjemahkan ke respons. */
+async function patchOneOrder(
+  env: Env,
+  s: Session,
+  order_id: string,
+  status: string,
+  greetingVal: unknown
+): Promise<string[]> {
 
   // Ambil status + promo lama dulu (untuk guard transisi & hitung used_count tepat sekali).
   const before = await env.DB.prepare(
@@ -276,16 +326,15 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   )
     .bind(order_id)
     .first<{ status: string; promo_code: string; retensi_at: string }>();
-  if (!before) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+  if (!before) throw { status: 404, error: "not found" };
 
   const changed: string[] = [];
 
   // 1) Flag greeting paralel ("sudah menyapa customer baru").
   //    onboard_done diterima sebagai alias lama demi kompatibilitas UI lama.
-  const greetingVal = b.greeting_done !== undefined ? b.greeting_done : b.onboard_done;
   if (greetingVal !== undefined) {
     if (!canSetGreeting(s) && !canSetOnboard(s)) {
-      return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
+      throw { status: 403, error: "forbidden" };
     }
     const v = greetingVal ? 1 : 0;
     await env.DB.prepare("UPDATE orders SET greeting_done = ?, onboard_done = ? WHERE order_id = ?")
@@ -295,13 +344,12 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   }
 
   // 2) Pindah status pipeline.
-  const status = b.status !== undefined ? String(b.status) : "";
   if (status) {
     if (!KNOWN_STATUSES.includes(status)) {
-      return new Response(JSON.stringify({ error: "status tidak valid" }), { status: 400, headers: cors });
+      throw { status: 400, error: "status tidak valid" };
     }
     if (status !== before.status && !canTransition(s, before.status, status)) {
-      return new Response(JSON.stringify({ error: "forbidden untuk divisimu" }), { status: 403, headers: cors });
+      throw { status: 403, error: "forbidden untuk divisimu" };
     }
     if (status !== before.status) {
       // Order final (verified/cancelled) langsung membebaskan kode uniknya
@@ -335,7 +383,7 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   }
 
   if (changed.length === 0) {
-    return new Response(JSON.stringify({ error: "tidak ada perubahan" }), { status: 400, headers: cors });
+    throw { status: 400, error: "tidak ada perubahan" };
   }
 
   // Order baru saja verified -> kirim email konfirmasi pembayaran (best-effort).
@@ -403,10 +451,11 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
       console.log(`[orders] email verified gagal: ${String(e).slice(0, 200)}`);
     }
   }
-  return Response.json({ ok: true, order_id, changed }, { headers: cors });
+  return changed;
 }
 
 // DELETE /api/orders?order_id=xxx — khusus admin (hapus order permanen).
+// Bulk: ?order_ids=a,b,c (maks 100) atau body JSON {order_ids: [...]}.
 // Baris yang dihapus otomatis membebaskan kode uniknya.
 export async function onRequestDelete({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
@@ -414,7 +463,37 @@ export async function onRequestDelete({ request, env }: { request: Request; env:
   if (!s || !canDeleteOrder(s)) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
-  const order_id = (new URL(request.url).searchParams.get("order_id") ?? "").slice(0, 64);
+  const params = new URL(request.url).searchParams;
+  const order_id = (params.get("order_id") ?? "").slice(0, 64);
+
+  // Mode bulk: query ?order_ids=a,b,c atau body JSON {order_ids: [...]}.
+  let bulkIds: string[] = (params.get("order_ids") ?? "")
+    .split(",")
+    .map((v) => v.trim().slice(0, 64))
+    .filter(Boolean);
+  if (bulkIds.length === 0 && !order_id) {
+    try {
+      const b = (await request.json()) as { order_ids?: unknown };
+      if (Array.isArray(b?.order_ids)) {
+        bulkIds = b.order_ids.map((v) => String(v ?? "").slice(0, 64)).filter(Boolean);
+      }
+    } catch {
+      /* abaikan — ditangani validasi di bawah */
+    }
+  }
+  if (bulkIds.length > 0) {
+    const ids = [...new Set(bulkIds)].slice(0, 100);
+    const deleted: string[] = [];
+    const not_found: string[] = [];
+    for (const id of ids) {
+      const res = (await env.DB.prepare("DELETE FROM orders WHERE order_id = ?")
+        .bind(id)
+        .run()) as { meta?: { changes?: number } };
+      (res?.meta?.changes ? deleted : not_found).push(id);
+    }
+    return Response.json({ ok: true, deleted, not_found }, { headers: cors });
+  }
+
   if (!order_id) {
     return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
   }

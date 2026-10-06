@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
 
@@ -206,6 +206,12 @@ export default function AdminPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Pilih multiple untuk aksi bulk (edit status / hapus).
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkStatus, setBulkStatus] = useState("verified");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const headBoxRef = useRef<HTMLInputElement>(null);
   // Menu titik-tiga (panel expandable pendorong container) + panel kredensial per order.
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [clients, setClients] = useState<ClientAccess[]>([]);
@@ -235,6 +241,8 @@ export default function AdminPage() {
         if (!res.ok) throw new Error("gagal");
         const data = (await res.json()) as { orders?: Order[] };
         setOrders(data.orders ?? []);
+        // Buang pilihan yang tidak ada lagi di hasil terbaru.
+        setSelected((sel) => sel.filter((id) => (data.orders ?? []).some((o) => o.order_id === id)));
       } catch {
         setError("Gagal memuat order. Coba muat ulang.");
       } finally {
@@ -267,6 +275,8 @@ export default function AdminPage() {
 
   function changeFilter(key: string) {
     setFilter(key);
+    setSelected([]);
+    setNotice(null);
     void load(key);
   }
 
@@ -360,6 +370,84 @@ export default function AdminPage() {
       setError("Gagal menghapus order.");
     } finally {
       setDeleting(null);
+    }
+  }
+
+  // --- Aksi bulk untuk order yang dicentang ---
+  function toggleSelect(order_id: string) {
+    setSelected((sel) => (sel.includes(order_id) ? sel.filter((id) => id !== order_id) : [...sel, order_id]));
+  }
+
+  // visibleOrders didefinisikan di bawah; helper pilih-semua memakai daftar tampil.
+  function toggleSelectVisible(list: Order[]) {
+    const ids = list.map((o) => o.order_id);
+    const allIn = ids.length > 0 && ids.every((id) => selected.includes(id));
+    setSelected((sel) => (allIn ? sel.filter((id) => !ids.includes(id)) : [...new Set([...sel, ...ids])]));
+  }
+
+  async function bulkApplyStatus() {
+    if (selected.length === 0 || !bulkStatus) return;
+    setBulkBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_ids: selected, status: bulkStatus }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json()) as {
+        ok?: boolean; updated?: number; failed?: number;
+        results?: { order_id: string; ok: boolean; error?: string }[];
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      const fails = (data.results ?? []).filter((r) => !r.ok);
+      setNotice(
+        fails.length === 0
+          ? `${data.updated} order dipindah ke "${STATUS_LABEL[bulkStatus] ?? bulkStatus}".`
+          : `${data.updated} berhasil, ${fails.length} dilewati (${fails.slice(0, 3).map((f) => f.error ?? "ditolak").join("; ")}${fails.length > 3 ? "…" : ""}).`
+      );
+      setSelected([]);
+      await load(filter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal bulk update.");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkDelete() {
+    if (selected.length === 0) return;
+    if (!window.confirm(`Hapus ${selected.length} order yang dipilih permanen? Kode uniknya ikut dibebaskan.`)) return;
+    setBulkBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_ids: selected }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json()) as { ok?: boolean; deleted?: string[]; not_found?: string[]; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setNotice(
+        `${(data.deleted ?? []).length} order dihapus${(data.not_found ?? []).length > 0 ? `, ${(data.not_found ?? []).length} tidak ditemukan` : ""}.`
+      );
+      setSelected([]);
+      await load(filter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal bulk hapus.");
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -508,6 +596,14 @@ export default function AdminPage() {
       .includes(s);
   });
 
+  // Indeterminate pada checkbox header bila sebagian baris tampil yang dipilih.
+  useEffect(() => {
+    if (headBoxRef.current) {
+      const n = visibleOrders.filter((o) => selected.includes(o.order_id)).length;
+      headBoxRef.current.indeterminate = n > 0 && n < visibleOrders.length;
+    }
+  }, [visibleOrders, selected]);
+
   if (auth === "checking") {
     return <main className="mx-auto max-w-6xl px-4 py-20 text-center text-sm text-stone-500">Memeriksa sesi…</main>;
   }
@@ -587,6 +683,11 @@ export default function AdminPage() {
           {error}
         </p>
       )}
+      {notice && (
+        <p className="mt-4 rounded-xl bg-teal-50 px-3 py-2 text-xs font-medium text-teal-700 ring-1 ring-teal-100">
+          {notice}
+        </p>
+      )}
 
       <div className="glass mt-4 flex items-center gap-2 rounded-2xl p-2">
         <span className="pl-2 text-sm text-stone-400">🔍</span>
@@ -606,6 +707,48 @@ export default function AdminPage() {
         )}
       </div>
 
+      {selected.length > 0 && (
+        <div className="glass-strong mt-4 flex flex-wrap items-center gap-2 rounded-2xl p-3">
+          <span className="rounded-full bg-stone-900 px-3 py-1 text-xs font-bold text-white">
+            {selected.length} dipilih
+          </span>
+          <label className="flex items-center gap-1.5 text-xs font-semibold text-stone-600">
+            Status
+            <select
+              value={bulkStatus}
+              onChange={(e) => setBulkStatus(e.target.value)}
+              className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+            >
+              {Object.entries(STATUS_LABEL).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={bulkApplyStatus}
+            disabled={bulkBusy}
+            className="rounded-full bg-teal-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+          >
+            {bulkBusy ? "…" : "Terapkan status"}
+          </button>
+          {isAdmin && (
+            <button
+              onClick={bulkDelete}
+              disabled={bulkBusy}
+              className="rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-60"
+            >
+              Hapus
+            </button>
+          )}
+          <button
+            onClick={() => setSelected([])}
+            className="rounded-full bg-white/70 px-4 py-1.5 text-xs font-semibold text-stone-500 ring-1 ring-white hover:bg-white"
+          >
+            Batalkan pilihan
+          </button>
+        </div>
+      )}
+
       <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
         {loading ? (
           <p className="p-8 text-center text-sm text-stone-500">Memuat order…</p>
@@ -617,6 +760,16 @@ export default function AdminPage() {
           <table className="w-full min-w-3xl text-left text-sm">
             <thead>
               <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">
+                  <input
+                    ref={headBoxRef}
+                    type="checkbox"
+                    aria-label="Pilih semua yang tampil"
+                    checked={visibleOrders.length > 0 && visibleOrders.every((o) => selected.includes(o.order_id))}
+                    onChange={() => toggleSelectVisible(visibleOrders)}
+                    className="h-4 w-4 align-middle accent-teal-600"
+                  />
+                </th>
                 <th className="px-4 py-3 font-semibold">Order</th>
                 <th className="px-4 py-3 font-semibold">Customer</th>
                 <th className="px-4 py-3 font-semibold">Kontak</th>
@@ -632,7 +785,16 @@ export default function AdminPage() {
                 const expanded = credFor === o.order_id;
                 return (
                 <Fragment key={o.order_id}>
-                <tr className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                <tr className={`border-b border-white/50 last:border-0 hover:bg-white/40 ${selected.includes(o.order_id) ? "bg-teal-50/50" : ""}`}>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label={`Pilih order ${o.order_id.slice(0, 8)}`}
+                      checked={selected.includes(o.order_id)}
+                      onChange={() => toggleSelect(o.order_id)}
+                      className="h-4 w-4 align-middle accent-teal-600"
+                    />
+                  </td>
                   <td className="px-4 py-3">
                     <p className="font-semibold">{o.product}</p>
                     <p className="font-mono text-[11px] text-stone-400">{o.order_id.slice(0, 8)}…</p>
@@ -708,7 +870,7 @@ export default function AdminPage() {
                 </tr>
                 {menuFor === o.order_id && (
                   <tr className="border-b border-white/50 bg-stone-50/60">
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <div className="flex flex-wrap justify-end gap-1.5">
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
@@ -826,7 +988,7 @@ export default function AdminPage() {
                 )}
                 {expanded && (
                   <tr className="border-b border-white/50 bg-teal-50/40">
-                    <td colSpan={6} className="px-4 py-4">
+                    <td colSpan={7} className="px-4 py-4">
                       <div className="rounded-2xl bg-white/80 p-4 ring-1 ring-white">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-bold">Kirim credential akses</p>
