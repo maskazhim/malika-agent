@@ -198,7 +198,7 @@ export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
   const [me, setMe] = useState<MeUser | null>(null);
-  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users" | "affiliate">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users" | "affiliate" | "servers">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -610,12 +610,14 @@ export default function AdminPage() {
 
   const isAdmin = !!me && (me.is_admin || me.division === "admin");
   const canLogs = !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer", "retensi", "bisdev"].includes(me.division));
-  const tabs = (["orders", "pricing", "logs", "promos", "affiliate", "users"] as const).filter((v) => {
+  const canServer = !!me && (me.is_admin || ["admin", "it", "ai_engineer"].includes(me.division));
+  const tabs = (["orders", "pricing", "logs", "promos", "affiliate", "users", "servers"] as const).filter((v) => {
     if (v === "orders" || v === "logs") return v === "orders" ? true : canLogs;
+    if (v === "servers") return canServer;
     return isAdmin;
   });
   const tabLabel = (v: string): string =>
-    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : v === "affiliate" ? "Affiliate" : "Staff";
+    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : v === "affiliate" ? "Affiliate" : v === "servers" ? "Server" : "Staff";
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
@@ -662,6 +664,8 @@ export default function AdminPage() {
         <AffiliateManager />
       ) : view === "users" && isAdmin ? (
         <UsersManager meUsername={me?.username ?? ""} />
+      ) : view === "servers" && canServer ? (
+        <ServerManager />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -1474,6 +1478,275 @@ const LOG_FILTERS = [
   { key: "needs_review", label: "Perlu review" },
   { key: "ignored", label: "Diabaikan" },
 ];
+
+interface DeployConfig {
+  order_id: string;
+  client_name: string;
+  short_name: string;
+  server_name: string;
+  project_name: string;
+  server_ip: string;
+  web_domain: string;
+  connector_domain: string;
+  router_domain: string;
+  gowa_domain: string;
+  deploy_status: string;
+  updated_at: string;
+}
+
+const DEPLOY_STYLE: Record<string, string> = {
+  pending: "bg-stone-200 text-stone-600",
+  provisioning: "bg-blue-100 text-blue-800",
+  ready: "bg-teal-100 text-teal-800",
+  failed: "bg-red-100 text-red-700",
+};
+
+function ServerManager() {
+  const [configs, setConfigs] = useState<DeployConfig[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editFor, setEditFor] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editMsg, setEditMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/deploy-configs");
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { configs?: DeployConfig[] };
+      setConfigs(data.configs ?? []);
+    } catch {
+      setError("Gagal memuat config server. Coba muat ulang.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function openEdit(order_id: string) {
+    setEditMsg(null);
+    setEditFor(order_id);
+    setEditLoading(true);
+    try {
+      const res = await fetch(`/api/deploy-configs?order_id=${encodeURIComponent(order_id)}`);
+      const data = (await res.json()) as { ok?: boolean; config?: Record<string, unknown> };
+      const f: Record<string, string> = {};
+      if (res.ok && data.config) {
+        for (const k of CFG_KEYS) f[k] = String(data.config[k] ?? "");
+      } else {
+        for (const k of CFG_KEYS) f[k] = "";
+        setEditMsg("Belum ada config untuk order ini — isi lalu simpan untuk membuat baru.");
+      }
+      setEditForm(f);
+    } catch {
+      const f: Record<string, string> = {};
+      for (const k of CFG_KEYS) f[k] = "";
+      setEditForm(f);
+      setEditMsg("Gagal memuat config.");
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  async function saveEdit() {
+    if (!editFor) return;
+    setEditSaving(true);
+    setEditMsg(null);
+    try {
+      const res = await fetch("/api/deploy-configs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: editFor, ...editForm }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setEditFor(null);
+      void load();
+    } catch (err) {
+      setEditMsg(err instanceof Error ? err.message : "Gagal menyimpan config.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  const visible = configs.filter((c) => {
+    const s = search.trim().toLowerCase();
+    if (!s) return true;
+    return [c.order_id, c.client_name, c.short_name, c.server_name, c.server_ip, c.web_domain]
+      .join(" ")
+      .toLowerCase()
+      .includes(s);
+  });
+
+  return (
+    <div className="mt-4">
+      <div className="glass flex items-center gap-2 rounded-2xl p-2">
+        <span className="pl-2 text-sm text-stone-400">🔍</span>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cari server: klien, server name, IP, domain, order ID…"
+          className="w-full bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-stone-400"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch("")}
+            className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>
+      )}
+      <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat config server…</p>
+        ) : visible.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada config deploy. Config dibuat otomatis saat checkout.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Order</th>
+                <th className="px-4 py-3 font-semibold">Klien / Server</th>
+                <th className="px-4 py-3 font-semibold">IP</th>
+                <th className="px-4 py-3 font-semibold">Domain</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((c) => (
+                <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                  <td className="px-4 py-3 font-mono text-[11px] text-stone-500">{c.order_id.slice(0, 8)}…</td>
+                  <td className="px-4 py-3">
+                    <p className="text-xs font-semibold">{c.client_name || "-"}</p>
+                    <p className="text-[11px] text-stone-500">{c.server_name || "-"}</p>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs">{c.server_ip || "-"}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{c.web_domain || "-"}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${DEPLOY_STYLE[c.deploy_status] ?? "bg-stone-200 text-stone-600"}`}
+                    >
+                      {c.deploy_status || "pending"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => void openEdit(c.order_id)}
+                      className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                    >
+                      ⚙ Config
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {editFor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold">⚙ Config deploy — <span className="font-mono">{editFor}</span></p>
+              <button
+                onClick={() => {
+                  setEditFor(null);
+                  setEditMsg(null);
+                }}
+                className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-stone-200 hover:bg-stone-100"
+                aria-label="Tutup"
+              >
+                ✕
+              </button>
+            </div>
+            {editLoading ? (
+              <p className="mt-4 text-center text-sm text-stone-500">Memuat config…</p>
+            ) : (
+              <div className="mt-3 space-y-4">
+                {CFG_GROUPS.map((g) => (
+                  <div key={g.title} className="rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-stone-400">{g.title}</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {g.fields.map((f) =>
+                        f.kind === "check" ? (
+                          <label key={f.key} className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-stone-200">
+                            <input
+                              type="checkbox"
+                              checked={editForm[f.key] === "1"}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, [f.key]: e.target.checked ? "1" : "0" }))}
+                              className="h-4 w-4 accent-teal-600"
+                            />
+                            <span className="text-xs font-medium text-stone-600">{f.label}</span>
+                          </label>
+                        ) : f.kind === "area" ? (
+                          <label key={f.key} className="block sm:col-span-2">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">{f.label}</span>
+                            <textarea
+                              value={editForm[f.key] ?? ""}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              rows={3}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-teal-400"
+                            />
+                          </label>
+                        ) : f.kind === "view" ? (
+                          <div key={f.key} className="rounded-xl bg-stone-100 px-3 py-2 sm:col-span-2">
+                            <p className="text-[11px] font-medium text-stone-500">{f.label}</p>
+                            <p className="whitespace-pre-wrap font-mono text-xs text-stone-700">{editForm[f.key] || "-"}</p>
+                          </div>
+                        ) : (
+                          <label key={f.key} className="block">
+                            <span className="mb-1 block text-[11px] font-medium text-stone-500">{f.label}</span>
+                            <input
+                              value={editForm[f.key] ?? ""}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                            />
+                          </label>
+                        )
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {editMsg && <p className="mt-3 text-xs font-medium text-stone-600">{editMsg}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setEditFor(null);
+                  setEditMsg(null);
+                }}
+                className="rounded-full bg-white px-5 py-2 text-xs font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => void saveEdit()}
+                disabled={editLoading || editSaving}
+                className="malika-gradient rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+              >
+                {editSaving ? "Menyimpan…" : "Simpan config"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PaymentLogs() {
   const [logs, setLogs] = useState<PayLog[]>([]);

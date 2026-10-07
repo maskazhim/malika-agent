@@ -4,7 +4,7 @@
    dibaca & dilengkapi saat setup server.
 
    Akses (staff pelaksana setup + admin, lihat canEditConfig):
-      GET   ?order_id=xxx — satu config
+      GET   ?order_id=xxx — satu config; tanpa param = daftar semua
       PATCH {order_id, ...kolom} — upsert kolom allowlist
 */
 
@@ -64,13 +64,19 @@ export async function onRequestOptions() {
 }
 
 // GET /api/deploy-configs?order_id=xxx — baca satu config.
+// GET /api/deploy-configs — daftar semua (tab Server).
 export async function onRequestGet({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s = await getSession(request, env);
   if (!s) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   if (!canEditConfig(s)) return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
   const order_id = (new URL(request.url).searchParams.get("order_id") ?? "").slice(0, 64);
-  if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
+  if (!order_id) {
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM deploy_configs ORDER BY updated_at DESC LIMIT 500"
+    ).all();
+    return Response.json({ ok: true, configs: results ?? [] }, { headers: cors });
+  }
   const row = await env.DB.prepare("SELECT * FROM deploy_configs WHERE order_id = ?").bind(order_id).first();
   if (!row) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
   return Response.json({ ok: true, config: row }, { headers: cors });
