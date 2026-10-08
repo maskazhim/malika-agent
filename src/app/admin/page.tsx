@@ -1678,6 +1678,8 @@ function ServerManager() {
             <tbody>
               {visible.map((c) => {
                 const v = c.vps_id ? vps[String(c.vps_id)] : undefined;
+                const vpsPending = vpsLoading && !v;
+                const skel = <span className="inline-block h-4 w-16 animate-pulse rounded bg-stone-200" />;
                 return (
                 <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
                   <td className="px-4 py-3 font-mono text-[11px] text-stone-500">{c.order_id.slice(0, 8)}…</td>
@@ -1686,11 +1688,11 @@ function ServerManager() {
                     <p className="text-[11px] text-stone-500">{c.server_name || "-"}</p>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">{c.server_ip || "-"}</td>
-                  <td className="px-4 py-3 text-xs">{v?.status ?? "-"}</td>
-                  <td className="px-4 py-3 text-xs">{v?.periode ?? "-"}</td>
-                  <td className="px-4 py-3 text-xs">{v?.tempo ?? "-"}</td>
-                  <td className="px-4 py-3 font-mono text-[11px]">{v?.ip ?? "-"}</td>
-                  <td className="px-4 py-3 text-sm">{v ? (v.online ? "🟢" : "🔴") : "-"}</td>
+                  <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.status ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.periode ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.tempo ?? "-"}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{vpsPending ? skel : v?.ip ?? "-"}</td>
+                  <td className="px-4 py-3 text-sm">{vpsPending ? skel : v ? (v.online ? "🟢" : "🔴") : "-"}</td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${DEPLOY_STYLE[c.deploy_status] ?? "bg-stone-200 text-stone-600"}`}
