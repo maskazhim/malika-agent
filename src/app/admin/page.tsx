@@ -140,6 +140,7 @@ const CFG_GROUPS: { title: string; fields: { key: string; label: string; kind: C
   {
     title: "Server",
     fields: [
+      { key: "vps_id", label: "VPS ID (service_id IndoVM)", kind: "text" },
       { key: "server_ip", label: "Server IP", kind: "text" },
       { key: "server_user", label: "SSH user", kind: "text" },
       { key: "ssh_port", label: "SSH port", kind: "text" },
@@ -1485,6 +1486,7 @@ interface DeployConfig {
   short_name: string;
   server_name: string;
   project_name: string;
+  vps_id: string;
   server_ip: string;
   web_domain: string;
   connector_domain: string;
@@ -1506,6 +1508,10 @@ function ServerManager() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [vps, setVps] = useState<Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>>({});
+  const [vpsAt, setVpsAt] = useState("");
+  const [vpsLoading, setVpsLoading] = useState(false);
+  const [vpsMsg, setVpsMsg] = useState<string | null>(null);
   const [editFor, setEditFor] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editLoading, setEditLoading] = useState(false);
@@ -1530,6 +1536,33 @@ function ServerManager() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Lookup status VPS IndoVM (mapping service_id = vps_id). Best-effort:
+  // tabel config tetap tampil walau lookup gagal/lambat.
+  const loadVps = useCallback(async () => {
+    setVpsLoading(true);
+    setVpsMsg(null);
+    try {
+      const res = await fetch("/api/vps-status");
+      const data = (await res.json()) as {
+        ok?: boolean;
+        vps?: Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>;
+        diambil_pada?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setVps(data.vps ?? {});
+      setVpsAt(data.diambil_pada ?? "");
+    } catch (err) {
+      setVpsMsg(err instanceof Error ? err.message : "Gagal lookup VPS.");
+    } finally {
+      setVpsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadVps();
+  }, [loadVps]);
 
   async function openEdit(order_id: string) {
     setEditMsg(null);
@@ -1580,7 +1613,7 @@ function ServerManager() {
   const visible = configs.filter((c) => {
     const s = search.trim().toLowerCase();
     if (!s) return true;
-    return [c.order_id, c.client_name, c.short_name, c.server_name, c.server_ip, c.web_domain]
+    return [c.order_id, c.client_name, c.short_name, c.server_name, c.server_ip, c.web_domain, c.vps_id]
       .join(" ")
       .toLowerCase()
       .includes(s);
@@ -1593,9 +1626,17 @@ function ServerManager() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Cari server: klien, server name, IP, domain, order ID…"
+          placeholder="Cari server: klien, server name, IP, domain, VPS ID, order ID…"
           className="w-full bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-stone-400"
         />
+        <button
+          onClick={() => void loadVps()}
+          disabled={vpsLoading}
+          title="Refresh status VPS dari IndoVM"
+          className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
+        >
+          {vpsLoading ? "…" : "🔄 VPS"}
+        </button>
         {search && (
           <button
             onClick={() => setSearch("")}
@@ -1607,6 +1648,11 @@ function ServerManager() {
       </div>
       {error && (
         <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>
+      )}
+      {(vpsMsg || vpsAt) && (
+        <p className="mt-4 rounded-xl bg-stone-100 px-3 py-2 text-xs font-medium text-stone-500 ring-1 ring-stone-200">
+          {vpsMsg ?? `Status VPS per ${new Date(vpsAt).toLocaleString("id-ID")}`}
+        </p>
       )}
       <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
         {loading ? (
@@ -1620,13 +1666,19 @@ function ServerManager() {
                 <th className="px-4 py-3 font-semibold">Order</th>
                 <th className="px-4 py-3 font-semibold">Klien / Server</th>
                 <th className="px-4 py-3 font-semibold">IP</th>
-                <th className="px-4 py-3 font-semibold">Domain</th>
+                <th className="px-4 py-3 font-semibold">Layanan</th>
+                <th className="px-4 py-3 font-semibold">Periode</th>
+                <th className="px-4 py-3 font-semibold">Jatuh tempo</th>
+                <th className="px-4 py-3 font-semibold">IP VPS</th>
+                <th className="px-4 py-3 font-semibold">Online</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {visible.map((c) => (
+              {visible.map((c) => {
+                const v = c.vps_id ? vps[String(c.vps_id)] : undefined;
+                return (
                 <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
                   <td className="px-4 py-3 font-mono text-[11px] text-stone-500">{c.order_id.slice(0, 8)}…</td>
                   <td className="px-4 py-3">
@@ -1634,7 +1686,11 @@ function ServerManager() {
                     <p className="text-[11px] text-stone-500">{c.server_name || "-"}</p>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">{c.server_ip || "-"}</td>
-                  <td className="px-4 py-3 font-mono text-[11px]">{c.web_domain || "-"}</td>
+                  <td className="px-4 py-3 text-xs">{v?.status ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">{v?.periode ?? "-"}</td>
+                  <td className="px-4 py-3 text-xs">{v?.tempo ?? "-"}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{v?.ip ?? "-"}</td>
+                  <td className="px-4 py-3 text-sm">{v ? (v.online ? "🟢" : "🔴") : "-"}</td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${DEPLOY_STYLE[c.deploy_status] ?? "bg-stone-200 text-stone-600"}`}
@@ -1651,7 +1707,8 @@ function ServerManager() {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

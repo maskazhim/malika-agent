@@ -31,6 +31,7 @@ const ALLOW = [
   "project_name",
   "compose_name",
   "environment_name",
+  "vps_id",
   "server_ip",
   "server_user",
   "ssh_port",
