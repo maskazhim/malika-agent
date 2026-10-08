@@ -1506,7 +1506,7 @@ const DEPLOY_STYLE: Record<string, string> = {
 function ServerManager() {
   const [configs, setConfigs] = useState<DeployConfig[]>([]);
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState("updated_desc");
+  const [sortKey, setSortKey] = useState("tempo");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [vps, setVps] = useState<Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>>({});
@@ -1636,18 +1636,27 @@ function ServerManager() {
       .includes(s);
   });
 
+  // Nilai dd/mm/yyyy -> angka yyyymmdd (invalid = paling belakang).
+  function tempoVal(t: string): number {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((t || "").trim());
+    if (!m) return Number.MAX_SAFE_INTEGER;
+    return Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1]);
+  }
+
+  function vpsOf(c: DeployConfig) {
+    return c.vps_id ? vps[String(c.vps_id)] : undefined;
+  }
+
   const sorted = [...visible].sort((a, b) => {
+    const va = vpsOf(a);
+    const vb = vpsOf(b);
     switch (sortKey) {
-      case "updated_asc":
-        return (a.updated_at || "").localeCompare(b.updated_at || "");
-      case "client_asc":
-        return (a.client_name || "").localeCompare(b.client_name || "", "id");
       case "server_asc":
         return (a.server_name || "").localeCompare(b.server_name || "", "id");
-      case "status":
-        return (a.deploy_status || "").localeCompare(b.deploy_status || "");
+      case "tempo":
+        return tempoVal(va?.tempo ?? "") - tempoVal(vb?.tempo ?? "");
       default:
-        return (b.updated_at || "").localeCompare(a.updated_at || "");
+        return (a.client_name || "").localeCompare(b.client_name || "", "id");
     }
   });
 
@@ -1667,7 +1676,7 @@ function ServerManager() {
           title="Refresh status VPS dari IndoVM"
           className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
         >
-          {vpsLoading ? "…" : "🔄 VPS"}
+          {vpsLoading ? "…" : "🔄 Reload"}
         </button>
         <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-stone-500">
           Urut
@@ -1676,11 +1685,9 @@ function ServerManager() {
             onChange={(e) => setSortKey(e.target.value)}
             className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
           >
-            <option value="updated_desc">Terbaru diubah</option>
-            <option value="updated_asc">Terlama diubah</option>
             <option value="client_asc">Klien A–Z</option>
             <option value="server_asc">Server A–Z</option>
-            <option value="status">Status</option>
+            <option value="tempo">Jatuh tempo</option>
           </select>
         </label>
         {search && (
