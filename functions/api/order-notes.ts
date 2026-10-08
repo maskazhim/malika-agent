@@ -25,6 +25,28 @@ interface Env {
 
 import { canDeleteOrder, cors, getSession } from "./_auth";
 
+/* Buat tabel otomatis bila belum ada (mis. environment D1 baru).
+   Best-effort: bila gagal, query berikutnya yang akan error seperti biasa. */
+async function ensureTable(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS order_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      )`
+    )
+    .run()
+    .catch(() => {});
+  await db
+    .prepare("CREATE INDEX IF NOT EXISTS idx_order_notes_order ON order_notes(order_id)")
+    .run()
+    .catch(() => {});
+}
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
 }
@@ -34,6 +56,7 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s = await getSession(request, env);
   if (!s) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  await ensureTable(env.DB);
   const params = new URL(request.url).searchParams;
   if (params.get("latest") === "1") {
     const { results } = await env.DB.prepare(
@@ -69,6 +92,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s = await getSession(request, env);
   if (!s) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  await ensureTable(env.DB);
   let b: { order_id?: unknown; note?: unknown };
   try {
     b = (await request.json()) as typeof b;
@@ -93,6 +117,7 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   const s = await getSession(request, env);
   if (!s) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+  await ensureTable(env.DB);
   let b: { id?: unknown; note?: unknown };
   try {
     b = (await request.json()) as typeof b;
@@ -121,6 +146,7 @@ export async function onRequestDelete({ request, env }: { request: Request; env:
   if (!s || !canDeleteOrder(s)) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
+  await ensureTable(env.DB);
   const id = Math.round(Number(new URL(request.url).searchParams.get("id") ?? ""));
   if (!Number.isFinite(id) || id <= 0) {
     return new Response(JSON.stringify({ error: "id tidak valid" }), { status: 400, headers: cors });
