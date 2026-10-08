@@ -233,6 +233,7 @@ export default function AdminPage() {
   const [notesMsg, setNotesMsg] = useState<string | null>(null);
   const [newNote, setNewNote] = useState("");
   const [noteSaving, setNoteSaving] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, string>>({});  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgSaving, setCfgSaving] = useState(false);
@@ -622,6 +623,7 @@ export default function AdminPage() {
     closeMenu();
     setNotesMsg(null);
     setNewNote("");
+    setShowAdd(false);
     setDrafts({});
     setNotesFor(order_id);
     setNotesLoading(true);
@@ -639,8 +641,11 @@ export default function AdminPage() {
       const d: Record<number, string> = {};
       for (const n of list) d[n.id] = n.note;
       setDrafts(d);
+      // Belum ada notes -> langsung tampilkan form tambah.
+      if (list.length === 0) setShowAdd(true);
     } catch {
       setNotesList([]);
+      setShowAdd(true);
       setNotesMsg("Gagal memuat notes.");
     } finally {
       setNotesLoading(false);
@@ -661,6 +666,7 @@ export default function AdminPage() {
       const data = (await res.json().catch(() => null)) as { ok?: boolean; id?: number; error?: string } | null;
       if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
       setNewNote("");
+      setShowAdd(false);
       await openNotes(notesFor);
       void loadSnippets();
     } catch (err) {
@@ -1252,6 +1258,7 @@ export default function AdminPage() {
                 ✕
               </button>
             </div>
+            {showAdd ? (
             <div className="mt-3">
               <textarea
                 value={newNote}
@@ -1260,7 +1267,18 @@ export default function AdminPage() {
                 placeholder="Tulis note baru…"
                 className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
               />
-              <div className="mt-2 flex justify-end">
+              <div className="mt-2 flex justify-end gap-2">
+                {notesList.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setShowAdd(false);
+                      setNewNote("");
+                    }}
+                    className="rounded-full bg-white px-5 py-2 text-xs font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100"
+                  >
+                    Batal
+                  </button>
+                )}
                 <button
                   onClick={() => void addNote()}
                   disabled={noteSaving || !newNote.trim()}
@@ -1270,6 +1288,18 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
+            ) : (
+              !notesLoading && (
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={() => setShowAdd(true)}
+                    className="rounded-full bg-white px-5 py-2 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                  >
+                    + Tambah note
+                  </button>
+                </div>
+              )
+            )}
             {notesLoading ? (
               <p className="mt-4 text-center text-sm text-stone-500">Memuat notes…</p>
             ) : notesList.length === 0 ? (
