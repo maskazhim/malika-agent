@@ -903,7 +903,6 @@ export default function AdminPage() {
                 </th>
                 <th className="px-4 py-3 font-semibold">Order</th>
                 <th className="px-4 py-3 font-semibold">Customer</th>
-                <th className="px-4 py-3 font-semibold">Kontak</th>
                 <th className="px-4 py-3 font-semibold">Total</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Notes</th>
@@ -946,10 +945,8 @@ export default function AdminPage() {
                   <td className="px-4 py-3">
                     <p className="font-medium">{o.nama}</p>
                     <p className="text-xs text-stone-500">{o.bisnis}</p>
-                  </td>
-                  <td className="px-4 py-3 text-xs">
-                    <p>{o.telepon}</p>
-                    <p className="text-stone-500">{o.email}</p>
+                    <p className="text-xs">{o.telepon}</p>
+                    <p className="text-xs text-stone-500">{o.email}</p>
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-bold">{formatRp(o.amount)}</p>
@@ -1027,7 +1024,7 @@ export default function AdminPage() {
                 </tr>
                 {menuFor === o.order_id && (
                   <tr className="border-b border-white/50 bg-stone-50/60">
-                    <td colSpan={8} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <div className="flex flex-wrap justify-end gap-1.5">
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
@@ -1145,7 +1142,7 @@ export default function AdminPage() {
                 )}
                 {expanded && (
                   <tr className="border-b border-white/50 bg-teal-50/40">
-                    <td colSpan={8} className="px-4 py-4">
+                    <td colSpan={7} className="px-4 py-4">
                       <div className="rounded-2xl bg-white/80 p-4 ring-1 ring-white">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-bold">Kirim credential akses</p>
