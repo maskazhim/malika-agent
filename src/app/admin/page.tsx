@@ -1727,12 +1727,25 @@ function ServerManager() {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => void openEdit(c.order_id)}
-                      className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
-                    >
-                      ⚙ Config
-                    </button>
+                    <div className="flex flex-wrap gap-1.5">
+                      {c.vps_id && (
+                        <a
+                          href={`https://www.indovm.com/myaccount/myproducts-detail/${encodeURIComponent(c.vps_id)}?m_page=home`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Buka di IndoVM"
+                          className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                        >
+                          IndoVM ↗
+                        </a>
+                      )}
+                      <button
+                        onClick={() => void openEdit(c.order_id)}
+                        className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
+                      >
+                        ⚙ Config
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 );
