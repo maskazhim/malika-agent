@@ -223,7 +223,18 @@ export default function AdminPage() {
   const [sentCred, setSentCred] = useState<Record<string, { access_url: string; email: string; password: string }>>({});
   // Popup Config: edit deploy_configs per order.
   const [cfgFor, setCfgFor] = useState<string | null>(null);
-  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
+  // Notes per order (cuplikan 1 baris di tabel + popup editor).
+  const [snippets, setSnippets] = useState<Record<string, { snippet: string; count: number }>>({});
+  const [notesFor, setNotesFor] = useState<string | null>(null);
+  const [notesList, setNotesList] = useState<
+    { id: number; note: string; created_by: string; created_at: string; updated_at: string }[]
+  >([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesMsg, setNotesMsg] = useState<string | null>(null);
+  const [newNote, setNewNote] = useState("");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgSaving, setCfgSaving] = useState(false);
   const [cfgMsg, setCfgMsg] = useState<string | null>(null);
@@ -253,6 +264,24 @@ export default function AdminPage() {
     [router]
   );
 
+  // Cuplikan notes semua order (1 request, best-effort).
+  const loadSnippets = useCallback(async () => {
+    try {
+      const res = await fetch("/api/order-notes?latest=1");
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        snippets?: { order_id: string; snippet: string; count: number }[];
+      };
+      const m: Record<string, { snippet: string; count: number }> = {};
+      for (const sn of data.snippets ?? []) {
+        m[sn.order_id] = { snippet: sn.snippet, count: sn.count };
+      }
+      setSnippets(m);
+    } catch {
+      /* abaikan — kolom notes tetap tampil kosong */
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/auth")
       .then((r) => r.json().catch(() => null))
@@ -262,6 +291,7 @@ export default function AdminPage() {
           setMe(data.user ?? null);
           setAuth("ok");
           void load("");
+          void loadSnippets();
           // Daftar akses klien (untuk panel kredensial per order).
           fetch("/api/clients")
             .then((r) => (r.ok ? r.json() : null))
@@ -272,7 +302,7 @@ export default function AdminPage() {
         }
       })
       .catch(() => router.replace("/login"));
-  }, [router, load]);
+  }, [router, load, loadSnippets]);
 
   function changeFilter(key: string) {
     setFilter(key);
@@ -588,6 +618,93 @@ export default function AdminPage() {
     }
   }
 
+  // Buka popup notes satu order.
+  async function openNotes(order_id: string) {
+    closeMenu();
+    setNotesMsg(null);
+    setNewNote("");
+    setEditingId(null);
+    setNotesFor(order_id);
+    setNotesLoading(true);
+    try {
+      const res = await fetch(`/api/order-notes?order_id=${encodeURIComponent(order_id)}`);
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json()) as {
+        notes?: { id: number; note: string; created_by: string; created_at: string; updated_at: string }[];
+      };
+      setNotesList(data.notes ?? []);
+    } catch {
+      setNotesList([]);
+      setNotesMsg("Gagal memuat notes.");
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
+  // Tambah note baru.
+  async function addNote() {
+    if (!notesFor || !newNote.trim()) return;
+    setNoteSaving(true);
+    setNotesMsg(null);
+    try {
+      const res = await fetch("/api/order-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: notesFor, note: newNote.trim() }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; id?: number; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setNewNote("");
+      await openNotes(notesFor);
+      void loadSnippets();
+    } catch (err) {
+      setNotesMsg(err instanceof Error ? err.message : "Gagal menambah note.");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  // Simpan hasil edit satu note.
+  async function saveNoteEdit(id: number) {
+    if (!editText.trim()) return;
+    setNoteSaving(true);
+    setNotesMsg(null);
+    try {
+      const res = await fetch("/api/order-notes", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, note: editText.trim() }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setEditingId(null);
+      if (notesFor) await openNotes(notesFor);
+      void loadSnippets();
+    } catch (err) {
+      setNotesMsg(err instanceof Error ? err.message : "Gagal menyimpan note.");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  // Hapus satu note (admin).
+  async function removeNote(id: number) {
+    if (!window.confirm("Hapus note ini permanen?")) return;
+    setNotesMsg(null);
+    try {
+      const res = await fetch(`/api/order-notes?id=${id}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setNotesList((ns) => ns.filter((n) => n.id !== id));
+      void loadSnippets();
+    } catch (err) {
+      setNotesMsg(err instanceof Error ? err.message : "Gagal menghapus note.");
+    }
+  }
+
   const visibleOrders = orders.filter((o) => {
     const s = search.trim().toLowerCase();
     if (!s) return true;
@@ -780,6 +897,7 @@ export default function AdminPage() {
                 <th className="px-4 py-3 font-semibold">Kontak</th>
                 <th className="px-4 py-3 font-semibold">Total</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Notes</th>
                 <th className="px-4 py-3 font-semibold">Aksi</th>
               </tr>
             </thead>
@@ -863,6 +981,31 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
+                    {(() => {
+                      const sn = snippets[o.order_id];
+                      return (
+                        <button
+                          onClick={() => void openNotes(o.order_id)}
+                          title={sn ? "Buka notes" : "Tambah note"}
+                          className="block w-40 text-left"
+                        >
+                          {sn ? (
+                            <>
+                              <p className="truncate text-xs text-stone-700">{sn.snippet || "(kosong)"}</p>
+                              {sn.count > 1 && (
+                                <span className="mt-0.5 inline-block rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold text-stone-600">
+                                  +{sn.count - 1} lagi
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-[11px] font-medium text-stone-400 hover:text-teal-700">+ Catatan</span>
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </td>
+                  <td className="px-4 py-3">
                       <button
                         onClick={() => setMenuFor(menuFor === o.order_id ? null : o.order_id)}
                         aria-label="Menu aksi"
@@ -875,7 +1018,7 @@ export default function AdminPage() {
                 </tr>
                 {menuFor === o.order_id && (
                   <tr className="border-b border-white/50 bg-stone-50/60">
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={8} className="px-4 py-3">
                       <div className="flex flex-wrap justify-end gap-1.5">
                             {o.status === "payment_proof" && canVerify(me) && (
                               <button
@@ -993,7 +1136,7 @@ export default function AdminPage() {
                 )}
                 {expanded && (
                   <tr className="border-b border-white/50 bg-teal-50/40">
-                    <td colSpan={7} className="px-4 py-4">
+                    <td colSpan={8} className="px-4 py-4">
                       <div className="rounded-2xl bg-white/80 p-4 ring-1 ring-white">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-bold">Kirim credential akses</p>
@@ -1089,6 +1232,110 @@ export default function AdminPage() {
         )}
       </div>
         </>
+      )}
+      {notesFor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold">🗒 Notes — <span className="font-mono">{notesFor.slice(0, 8)}…</span></p>
+              <button
+                onClick={() => {
+                  setNotesFor(null);
+                  setNotesMsg(null);
+                }}
+                className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-stone-200 hover:bg-stone-100"
+                aria-label="Tutup"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mt-3">
+              <textarea
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                rows={3}
+                placeholder="Tulis note baru…"
+                className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+              <div className="mt-2 flex justify-end">
+                <button
+                  onClick={() => void addNote()}
+                  disabled={noteSaving || !newNote.trim()}
+                  className="malika-gradient rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  {noteSaving ? "Menyimpan…" : "+ Tambah note"}
+                </button>
+              </div>
+            </div>
+            {notesLoading ? (
+              <p className="mt-4 text-center text-sm text-stone-500">Memuat notes…</p>
+            ) : notesList.length === 0 ? (
+              <p className="mt-4 text-center text-sm text-stone-500">Belum ada note untuk order ini.</p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {notesList.map((n) => (
+                  <div key={n.id} className="rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100">
+                    {editingId === n.id ? (
+                      <>
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          rows={3}
+                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+                        />
+                        <div className="mt-2 flex justify-end gap-2">
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100"
+                          >
+                            Batal
+                          </button>
+                          <button
+                            onClick={() => void saveNoteEdit(n.id)}
+                            disabled={noteSaving || !editText.trim()}
+                            className="malika-gradient rounded-full px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                          >
+                            {noteSaving ? "…" : "Simpan"}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="whitespace-pre-wrap text-sm text-stone-800">{n.note}</p>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <p className="text-[11px] text-stone-400">
+                            {n.created_by || "-"} · {n.created_at ? new Date(n.created_at).toLocaleString("id-ID") : "-"}
+                            {n.updated_at && n.updated_at !== n.created_at ? " (diubah)" : ""}
+                          </p>
+                          <div className="flex shrink-0 gap-1.5">
+                            <button
+                              onClick={() => {
+                                setEditingId(n.id);
+                                setEditText(n.note);
+                              }}
+                              className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100"
+                            >
+                              Ubah
+                            </button>
+                            {isAdmin && (
+                              <button
+                                onClick={() => void removeNote(n.id)}
+                                className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-red-50 hover:text-red-600"
+                              >
+                                Hapus
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {notesMsg && <p className="mt-3 text-xs font-medium text-stone-600">{notesMsg}</p>}
+          </div>
+        </div>
       )}
       {cfgFor && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/40 p-4">
