@@ -1512,6 +1512,22 @@ function ServerManager() {
   const [vpsAt, setVpsAt] = useState("");
   const [vpsLoading, setVpsLoading] = useState(false);
   const [vpsMsg, setVpsMsg] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copyId(order_id: string) {
+    try {
+      await navigator.clipboard.writeText(order_id);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = order_id;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopiedId(order_id);
+    setTimeout(() => setCopiedId((c) => (c === order_id ? null : c)), 1500);
+  }
   const [editFor, setEditFor] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editLoading, setEditLoading] = useState(false);
@@ -1665,11 +1681,10 @@ function ServerManager() {
               <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
                 <th className="px-4 py-3 font-semibold">Order</th>
                 <th className="px-4 py-3 font-semibold">Klien / Server</th>
-                <th className="px-4 py-3 font-semibold">IP</th>
                 <th className="px-4 py-3 font-semibold">Layanan</th>
                 <th className="px-4 py-3 font-semibold">Periode</th>
                 <th className="px-4 py-3 font-semibold">Jatuh tempo</th>
-                <th className="px-4 py-3 font-semibold">IP VPS</th>
+                <th className="px-4 py-3 font-semibold">IP</th>
                 <th className="px-4 py-3 font-semibold">Online</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Aksi</th>
@@ -1682,16 +1697,27 @@ function ServerManager() {
                 const skel = <span className="inline-block h-4 w-16 animate-pulse rounded bg-stone-200" />;
                 return (
                 <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
-                  <td className="px-4 py-3 font-mono text-[11px] text-stone-500">{c.order_id.slice(0, 8)}…</td>
+                  <td className="px-4 py-3">
+                    <span className="font-mono text-[11px] text-stone-500" title={c.order_id}>
+                      {c.order_id.slice(0, 8)}…
+                    </span>
+                    <button
+                      onClick={() => void copyId(c.order_id)}
+                      title="Salin order ID"
+                      aria-label="Salin order ID"
+                      className="ml-1 rounded-md px-1 text-[11px] text-stone-400 hover:bg-white hover:text-stone-700"
+                    >
+                      {copiedId === c.order_id ? "✓" : "⧉"}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">
                     <p className="text-xs font-semibold">{c.client_name || "-"}</p>
                     <p className="text-[11px] text-stone-500">{c.server_name || "-"}</p>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs">{c.server_ip || "-"}</td>
                   <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.status ?? "-"}</td>
                   <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.periode ?? "-"}</td>
                   <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.tempo ?? "-"}</td>
-                  <td className="px-4 py-3 font-mono text-[11px]">{vpsPending ? skel : v?.ip ?? "-"}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">{vpsPending ? skel : v?.ip || c.server_ip || "-"}</td>
                   <td className="px-4 py-3 text-sm">{vpsPending ? skel : v ? (v.online ? "🟢" : "🔴") : "-"}</td>
                   <td className="px-4 py-3">
                     <span
