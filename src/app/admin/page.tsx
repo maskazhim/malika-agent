@@ -1506,6 +1506,7 @@ const DEPLOY_STYLE: Record<string, string> = {
 function ServerManager() {
   const [configs, setConfigs] = useState<DeployConfig[]>([]);
   const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("updated_desc");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [vps, setVps] = useState<Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>>({});
@@ -1635,6 +1636,21 @@ function ServerManager() {
       .includes(s);
   });
 
+  const sorted = [...visible].sort((a, b) => {
+    switch (sortKey) {
+      case "updated_asc":
+        return (a.updated_at || "").localeCompare(b.updated_at || "");
+      case "client_asc":
+        return (a.client_name || "").localeCompare(b.client_name || "", "id");
+      case "server_asc":
+        return (a.server_name || "").localeCompare(b.server_name || "", "id");
+      case "status":
+        return (a.deploy_status || "").localeCompare(b.deploy_status || "");
+      default:
+        return (b.updated_at || "").localeCompare(a.updated_at || "");
+    }
+  });
+
   return (
     <div className="mt-4">
       <div className="glass flex items-center gap-2 rounded-2xl p-2">
@@ -1653,6 +1669,20 @@ function ServerManager() {
         >
           {vpsLoading ? "…" : "🔄 VPS"}
         </button>
+        <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-stone-500">
+          Urut
+          <select
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value)}
+            className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+          >
+            <option value="updated_desc">Terbaru diubah</option>
+            <option value="updated_asc">Terlama diubah</option>
+            <option value="client_asc">Klien A–Z</option>
+            <option value="server_asc">Server A–Z</option>
+            <option value="status">Status</option>
+          </select>
+        </label>
         {search && (
           <button
             onClick={() => setSearch("")}
@@ -1691,7 +1721,7 @@ function ServerManager() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((c) => {
+              {sorted.map((c) => {
                 const v = c.vps_id ? vps[String(c.vps_id)] : undefined;
                 const vpsPending = vpsLoading && !v;
                 const skel = <span className="inline-block h-4 w-16 animate-pulse rounded bg-stone-200" />;
