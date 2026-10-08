@@ -611,7 +611,7 @@ export default function AdminPage() {
 
   const isAdmin = !!me && (me.is_admin || me.division === "admin");
   const canLogs = !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer", "retensi", "bisdev"].includes(me.division));
-  const canServer = !!me && (me.is_admin || ["admin", "it", "ai_engineer"].includes(me.division));
+  const canServer = !!me && (me.is_admin || ["admin", "it", "ai_engineer", "bisdev"].includes(me.division));
   const tabs = (["orders", "pricing", "logs", "promos", "affiliate", "users", "servers"] as const).filter((v) => {
     if (v === "orders" || v === "logs") return v === "orders" ? true : canLogs;
     if (v === "servers") return canServer;
