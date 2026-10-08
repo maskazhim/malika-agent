@@ -1990,7 +1990,7 @@ function ServerManager() {
               {sorted.map((c) => {
                 const v = c.vps_id ? vps[String(c.vps_id)] : undefined;
                 const vpsPending = vpsLoading && !v;
-                const skel = <span className="inline-block h-4 w-16 animate-pulse rounded bg-stone-200" />;
+                const skel = <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-stone-300 border-t-teal-600" />;
                 return (
                 <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
                   <td className="px-4 py-3">
