@@ -48,18 +48,24 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   const ws = b.work_start === undefined ? cur.work_start : String(b.work_start);
   const we = b.work_end === undefined ? cur.work_end : String(b.work_end);
   const wd = b.work_days === undefined ? cur.work_days : String(b.work_days);
+  const bs = b.break_start === undefined ? cur.break_start : String(b.break_start);
+  const be = b.break_end === undefined ? cur.break_end : String(b.break_end);
   if (!Number.isFinite(slot) || slot < 10 || slot > 240) {
     return new Response(JSON.stringify({ error: "durasi 10-240 menit" }), { status: 400, headers: cors });
   }
   if (!validHHMM(ws) || !validHHMM(we) || ws >= we) {
     return new Response(JSON.stringify({ error: "jam kerja tidak valid (HH:MM, mulai < selesai)" }), { status: 400, headers: cors });
   }
+  // Istirahat opsional: kosong = tanpa istirahat; bila diisi harus valid & di dalam jam kerja.
+  if ((bs || be) && (!validHHMM(bs) || !validHHMM(be) || bs >= be)) {
+    return new Response(JSON.stringify({ error: "jam istirahat tidak valid (kosongkan keduanya bila tanpa istirahat)" }), { status: 400, headers: cors });
+  }
   if (parseWorkDays(wd).size === 0) {
     return new Response(JSON.stringify({ error: "hari kerja kosong (0=Min..6=Sab, mis. 1,2,3,4,5)" }), { status: 400, headers: cors });
   }
   const now = new Date().toISOString();
   await env.DB.prepare(
-    "UPDATE support_settings SET slot_minutes = ?, work_start = ?, work_end = ?, work_days = ?, updated_at = ?, updated_by = ? WHERE id = 1"
-  ).bind(slot, ws, we, wd, now, s.username).run();
+    "UPDATE support_settings SET slot_minutes = ?, work_start = ?, work_end = ?, work_days = ?, break_start = ?, break_end = ?, updated_at = ?, updated_by = ? WHERE id = 1"
+  ).bind(slot, ws, we, wd, bs, be, now, s.username).run();
   return Response.json({ ok: true, settings: await getSettings(env.DB) }, { headers: cors });
 }

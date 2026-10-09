@@ -18,6 +18,8 @@ export interface SupportSettings {
   work_start: string;
   work_end: string;
   work_days: string;
+  break_start: string;
+  break_end: string;
 }
 
 export const PIC_TYPES = ["ai_engineer", "account_executive"] as const;
@@ -32,6 +34,31 @@ export function isPicType(t: unknown): t is PicType {
   return t === "ai_engineer" || t === "account_executive";
 }
 
+/* Kurangi jendela dengan jam istirahat (split bila break di tengah). */
+export function subtractBreak(wins: DayWindow[], bStart: string, bEnd: string): DayWindow[] {
+  const bs = hhmmToMin(bStart);
+  const be = hhmmToMin(bEnd);
+  const out: DayWindow[] = [];
+  for (const w of wins) {
+    const s = hhmmToMin(w.start);
+    const e = hhmmToMin(w.end);
+    if (be <= s || bs >= e) {
+      out.push(w);
+      continue;
+    }
+    if (bs > s) out.push({ start: w.start, end: minToHHMM(bs) });
+    if (be < e) out.push({ start: minToHHMM(be), end: w.end });
+  }
+  return out;
+}
+
+/* Cuti: tanggal tsb tidak ada slot sama sekali untuk staff. */
+export async function isTimeoff(db: D1Database, staff: string, day: string): Promise<boolean> {
+  const r = await db.prepare("SELECT id FROM support_timeoff WHERE staff_username = ? AND date = ? LIMIT 1")
+    .bind(staff, day).first().catch(() => null);
+  return !!r;
+}
+
 export async function ensureSupportTables(db: D1Database): Promise<void> {
   await db.prepare(
     `CREATE TABLE IF NOT EXISTS support_settings (
@@ -44,6 +71,15 @@ export async function ensureSupportTables(db: D1Database): Promise<void> {
     `INSERT INTO support_settings (id, slot_minutes, work_start, work_end, work_days, updated_at, updated_by)
      VALUES (1, 30, '09:00', '17:00', '1,2,3,4,5', '', '')
      ON CONFLICT(id) DO NOTHING`
+  ).run().catch(() => {});
+  // Self-heal kolom break (0026) untuk settings lama.
+  await db.prepare("ALTER TABLE support_settings ADD COLUMN break_start TEXT NOT NULL DEFAULT '12:00'").run().catch(() => {});
+  await db.prepare("ALTER TABLE support_settings ADD COLUMN break_end TEXT NOT NULL DEFAULT '13:00'").run().catch(() => {});
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS support_timeoff (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, staff_username TEXT NOT NULL DEFAULT '',
+      date TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '')`
   ).run().catch(() => {});
   await db.prepare(
     `CREATE TABLE IF NOT EXISTS support_availability (
@@ -68,14 +104,20 @@ export async function ensureSupportTables(db: D1Database): Promise<void> {
 }
 
 export async function getSettings(db: D1Database): Promise<SupportSettings> {
-  const row = await db.prepare("SELECT slot_minutes, work_start, work_end, work_days FROM support_settings WHERE id = 1")
-    .first<{ slot_minutes: number; work_start: string; work_end: string; work_days: string }>()
+  // SELECT * agar tahan kolom break belum ada di DB lama (field = undefined).
+  const row = await db.prepare("SELECT * FROM support_settings WHERE id = 1")
+    .first<Record<string, unknown>>()
     .catch(() => null);
+  const brS = String(row?.break_start ?? "");
+  const brE = String(row?.break_end ?? "");
+  const useBreak = validHHMM(brS) && validHHMM(brE) && brS < brE;
   return {
     slot_minutes: Math.max(10, Math.min(240, Math.round(Number(row?.slot_minutes ?? 30)) || 30)),
     work_start: validHHMM(row?.work_start) ? String(row?.work_start) : "09:00",
     work_end: validHHMM(row?.work_end) ? String(row?.work_end) : "17:00",
     work_days: String(row?.work_days ?? "1,2,3,4,5"),
+    break_start: useBreak ? brS : "",
+    break_end: useBreak ? brE : "",
   };
 }
 
@@ -160,13 +202,16 @@ export async function busyRanges(db: D1Database, staff: string, day: string): Pr
   return out;
 }
 
-/* Slot tersedia untuk staff pada tanggal (durasi menit). */
+/* Slot tersedia untuk staff pada tanggal (durasi menit).
+   Mengurangi jam istirahat & mengecualikan tanggal cuti. */
 export async function daySlots(
   db: D1Database, staff: string, day: string, durMin: number, nowWib: string
 ): Promise<{ start: string; end: string }[]> {
   const st = await getSettings(db);
+  if (await isTimeoff(db, staff, day)) return [];
   const dur = Math.max(10, Math.min(240, Math.round(durMin) || st.slot_minutes));
-  const wins = await effectiveWindows(db, staff, day, st);
+  let wins = await effectiveWindows(db, staff, day, st);
+  if (st.break_start && st.break_end) wins = subtractBreak(wins, st.break_start, st.break_end);
   if (wins.length === 0) return [];
   const busy = await busyRanges(db, staff, day);
   const out: { start: string; end: string }[] = [];

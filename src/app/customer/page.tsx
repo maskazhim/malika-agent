@@ -405,6 +405,8 @@ function SupportPanel({
 }) {
   const [picType, setPicType] = useState<"ai_engineer" | "account_executive">("ai_engineer");
   const [days, setDays] = useState<SlotDay[]>([]);
+  const [timeoff, setTimeoff] = useState<string[]>([]);
+  const [selDate, setSelDate] = useState("");
   const [slotMin, setSlotMin] = useState(30);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slot, setSlot] = useState("");
@@ -444,15 +446,26 @@ function SupportPanel({
   const loadSlots = useCallback(async (staff: string) => {
     if (!staff) {
       setDays([]);
+      setTimeoff([]);
       return;
     }
     setSlotsLoading(true);
     try {
-      const res = await fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}&slots=1&days=14`);
-      if (res.ok) {
-        const data = (await res.json()) as { days?: SlotDay[]; slot_minutes?: number };
-        setDays(data.days ?? []);
+      const [sr, tr] = await Promise.all([
+        fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}&slots=1&days=14`),
+        fetch(`/api/support-timeoff?staff=${encodeURIComponent(staff)}`),
+      ]);
+      if (sr.ok) {
+        const data = (await sr.json()) as { days?: SlotDay[]; slot_minutes?: number };
+        const ds = data.days ?? [];
+        setDays(ds);
         setSlotMin(Number(data.slot_minutes ?? 30));
+        const first = ds.find((d) => d.slots.length > 0);
+        setSelDate(first?.date ?? "");
+      }
+      if (tr.ok) {
+        const data = (await tr.json()) as { timeoff?: { date: string }[] };
+        setTimeoff((data.timeoff ?? []).map((t) => t.date));
       }
     } catch {
       /* abaikan */
@@ -467,6 +480,7 @@ function SupportPanel({
 
   useEffect(() => {
     setSlot("");
+    setSelDate("");
     if (pic?.username) void loadSlots(pic.username);
     else setDays([]);
   }, [pic?.username, loadSlots]);
@@ -578,7 +592,7 @@ function SupportPanel({
               </label>
             )}
             <div>
-              <p className="mb-1 text-xs font-medium text-stone-500">Pilih jadwal (14 hari ke depan)</p>
+              <p className="mb-1 text-xs font-medium text-stone-500">Pilih tanggal lalu jam</p>
               {slotsLoading ? (
                 <p className="rounded-xl bg-white/60 px-3 py-3 text-center text-xs text-stone-500 ring-1 ring-white">
                   Memuat jadwal {pic.name}…
@@ -588,21 +602,52 @@ function SupportPanel({
                   Belum ada slot tersedia 14 hari ke depan — coba lagi nanti atau hubungi support.
                 </p>
               ) : (
-                <div className="max-h-64 space-y-3 overflow-y-auto rounded-2xl bg-white/60 p-3 ring-1 ring-white">
-                  {days.filter((d) => d.slots.length > 0).map((d) => (
-                    <div key={d.date}>
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
-                        {ID_DAY[d.weekday]}, {Number(d.date.slice(8, 10))} {ID_MONTH[Number(d.date.slice(5, 7)) - 1]}
-                      </p>
-                      <div className="mt-1 flex flex-wrap gap-1.5">
-                        {d.slots.map((s) => (
+                <div className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {days.map((d) => {
+                      const has = d.slots.length > 0;
+                      const cuti = !has && timeoff.includes(d.date);
+                      const active = selDate === d.date;
+                      return (
+                        <button
+                          key={d.date}
+                          type="button"
+                          disabled={!has}
+                          onClick={() => {
+                            setSelDate(d.date);
+                            setSlot("");
+                          }}
+                          title={cuti ? "PIC cuti" : has ? `${d.slots.length} slot` : "Penuh"}
+                          className={`flex w-14 shrink-0 flex-col items-center rounded-xl px-2 py-2 transition ${
+                            active
+                              ? "bg-teal-600 text-white shadow"
+                              : has
+                                ? "bg-white ring-1 ring-stone-200 hover:ring-teal-400"
+                                : "bg-transparent text-stone-300"
+                          }`}
+                        >
+                          <span className="text-[10px] font-bold uppercase">{ID_DAY[d.weekday]}</span>
+                          <span className="text-lg font-bold leading-tight">{Number(d.date.slice(8, 10))}</span>
+                          <span className={`mt-0.5 h-1 w-1 rounded-full ${has ? "bg-teal-500" : "bg-transparent"}`} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(() => {
+                    const cur = days.find((d) => d.date === selDate);
+                    if (!cur || cur.slots.length === 0) {
+                      return <p className="mt-2 text-center text-[11px] text-stone-400">Pilih tanggal yang bertitik hijau.</p>;
+                    }
+                    return (
+                      <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-5">
+                        {cur.slots.map((s) => (
                           <button
                             key={s.start}
                             type="button"
                             onClick={() => setSlot(s.start)}
-                            className={`rounded-full px-3 py-1.5 font-mono text-[11px] font-semibold transition ${
+                            className={`rounded-xl px-2 py-2 font-mono text-xs font-semibold transition ${
                               slot === s.start
-                                ? "bg-teal-600 text-white"
+                                ? "bg-teal-600 text-white shadow"
                                 : "bg-white ring-1 ring-stone-200 hover:ring-teal-400"
                             }`}
                           >
@@ -610,8 +655,11 @@ function SupportPanel({
                           </button>
                         ))}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })()}
+                  <p className="mt-2 text-center text-[11px] text-stone-400">
+                    {slotMin} menit/sesi · istirahat & cuti PIC otomatis dikecualikan (WIB)
+                  </p>
                 </div>
               )}
             </div>

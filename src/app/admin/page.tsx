@@ -1330,7 +1330,7 @@ interface SupportBooking {
 /* Tab Support internal: pengaturan durasi & jam kerja (admin), availability
    mingguan PIC (AI engineer / retensi / admin), dan booking masuk. */
 function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: string; meDivision: string; isAdmin: boolean }) {
-  const [settings, setSettings] = useState({ slot_minutes: 30, work_start: "09:00", work_end: "17:00", work_days: "1,2,3,4,5" });
+  const [settings, setSettings] = useState({ slot_minutes: 30, work_start: "09:00", work_end: "17:00", work_days: "1,2,3,4,5", break_start: "12:00", break_end: "13:00" });
   const [setSaving, setSetSaving] = useState(false);
   const [staffOpts, setStaffOpts] = useState<{ username: string; name: string; division: string }[]>([]);
   const [target, setTarget] = useState(meUsername);
@@ -1345,6 +1345,10 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
   const [bkLoading, setBkLoading] = useState(true);
   const [acting, setActing] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [timeoff, setTimeoff] = useState<{ id: number; date: string; note: string }[]>([]);
+  const [offDate, setOffDate] = useState("");
+  const [offNote, setOffNote] = useState("");
+  const [offSaving, setOffSaving] = useState(false);
 
   const canEditTarget = isAdmin || (["ai_engineer", "retensi"].includes(meDivision) && target === meUsername);
 
@@ -1394,8 +1398,7 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
     }
   }, []);
 
-  const loadBookings = useCallback(async (sc: string, st: string) => {
-    setBkLoading(true);
+  const loadBookings = useCallback(async (sc: string, st: string) => {    setBkLoading(true);
     try {
       const q = `/api/support-bookings?scope=${sc}${st ? `&status=${st}` : ""}`;
       const res = await fetch(q);
@@ -1420,6 +1423,10 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
   }, [target, loadAvail]);
 
   useEffect(() => {
+    if (target) void loadTimeoff(target);
+  }, [target, loadTimeoff]);
+
+  useEffect(() => {
     void loadBookings(scope, statusFilter);
   }, [scope, statusFilter, loadBookings]);
 
@@ -1436,6 +1443,8 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
           work_start: settings.work_start,
           work_end: settings.work_end,
           work_days: settings.work_days,
+          break_start: settings.break_start,
+          break_end: settings.break_end,
         }),
       });
       const data = (await res.json()) as { ok?: boolean; settings?: typeof settings; error?: string };
@@ -1485,6 +1494,55 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
       void loadAvail(target);
     } catch {
       setMsg("Gagal menghapus.");
+    }
+  }
+
+  async function loadTimeoff(staff: string) {
+    if (!staff) return;
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const res = await fetch(`/api/support-timeoff?staff=${encodeURIComponent(staff)}&from=${today}`);
+      if (res.ok) {
+        const data = (await res.json()) as { timeoff?: { id: number; date: string; note: string }[] };
+        setTimeoff(data.timeoff ?? []);
+      }
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  async function addTimeoff(e: React.FormEvent) {
+    e.preventDefault();
+    if (!offDate) return;
+    setOffSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/support-timeoff", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staff: target, date: offDate, note: offNote }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setOffDate("");
+      setOffNote("");
+      setMsg(`Cuti ${target} ditambah — tanggal itu tidak bisa dibooking.`);
+      void loadTimeoff(target);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menambah cuti.");
+    } finally {
+      setOffSaving(false);
+    }
+  }
+
+  async function delTimeoff(id: number) {
+    if (!window.confirm("Hapus cuti ini? Tanggal kembali bisa dibooking.")) return;
+    try {
+      const res = await fetch(`/api/support-timeoff?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("gagal");
+      void loadTimeoff(target);
+    } catch {
+      setMsg("Gagal menghapus cuti.");
     }
   }
 
@@ -1548,6 +1606,31 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
                 className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
               />
             </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Istirahat mulai <span className="text-stone-400">(kosong = tanpa istirahat)</span></span>
+              <input
+                type="time" value={settings.break_start}
+                onChange={(e) => setSettings((s) => ({ ...s, break_start: e.target.value }))}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Istirahat selesai</span>
+              <input
+                type="time" value={settings.break_end}
+                onChange={(e) => setSettings((s) => ({ ...s, break_end: e.target.value }))}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <div className="flex items-end pb-1">
+              <button
+                type="button"
+                onClick={() => setSettings((s) => ({ ...s, break_start: "", break_end: "" }))}
+                className="rounded-full bg-white/70 px-4 py-2 text-xs font-semibold ring-1 ring-white hover:bg-white"
+              >
+                Hapus istirahat
+              </button>
+            </div>
           </div>
           <div className="mt-3">
             <p className="mb-1 text-xs font-medium text-stone-500">Hari kerja default (Senin–Jumat)</p>
@@ -1653,6 +1736,45 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
               </div>
             )}
           </>
+        )}
+      </div>
+      <div className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Tanggal Cuti</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          {target ? `Cuti untuk ${target}` : "Pilih staff dulu"} — tanggal cuti tidak muncul di jadwal customer.
+        </p>
+        {canEditTarget && target ? (
+          <form onSubmit={addTimeoff} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium text-stone-500">Tanggal</span>
+              <input type="date" value={offDate} onChange={(e) => setOffDate(e.target.value)} className="rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-teal-400" />
+            </label>
+            <label className="block min-w-40 flex-1">
+              <span className="mb-1 block text-[11px] font-medium text-stone-500">Keterangan (opsional)</span>
+              <input value={offNote} onChange={(e) => setOffNote(e.target.value)} placeholder="cth. Cuti tahunan" className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-teal-400" />
+            </label>
+            <button type="submit" disabled={offSaving || !offDate} className="rounded-full bg-teal-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60">
+              {offSaving ? "…" : "Tambah cuti"}
+            </button>
+          </form>
+        ) : (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+            Cuti diatur oleh PIC yang bersangkutan (AI engineer / retensi) atau admin.
+          </p>
+        )}
+        {timeoff.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {timeoff.map((t) => (
+              <span key={t.id} className="rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold text-amber-800">
+                🏖 {t.date}{t.note ? ` · ${t.note}` : ""}
+                {canEditTarget && (
+                  <button onClick={() => void delTimeoff(t.id)} title="Hapus cuti" className="ml-1.5 hover:text-red-600">✕</button>
+                )}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-stone-400">Belum ada cuti mendatang.</p>
         )}
       </div>
       <div className="glass-strong rounded-3xl p-6">
