@@ -451,21 +451,15 @@ function SupportPanel({
     }
     setSlotsLoading(true);
     try {
-      const [sr, tr] = await Promise.all([
-        fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}&slots=1&days=14`),
-        fetch(`/api/support-timeoff?staff=${encodeURIComponent(staff)}`),
-      ]);
+      const sr = await fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}&slots=1&days=14`);
       if (sr.ok) {
-        const data = (await sr.json()) as { days?: SlotDay[]; slot_minutes?: number };
+        const data = (await sr.json()) as { days?: SlotDay[]; slot_minutes?: number; timeoff?: string[] };
         const ds = data.days ?? [];
         setDays(ds);
         setSlotMin(Number(data.slot_minutes ?? 30));
+        setTimeoff(data.timeoff ?? []);
         const first = ds.find((d) => d.slots.length > 0);
         setSelDate(first?.date ?? "");
-      }
-      if (tr.ok) {
-        const data = (await tr.json()) as { timeoff?: { date: string }[] };
-        setTimeoff((data.timeoff ?? []).map((t) => t.date));
       }
     } catch {
       /* abaikan */

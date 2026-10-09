@@ -13,8 +13,8 @@ import { canManageUsers, cors, getSession, type EnvBase } from "./_auth";
 import { getCustomerSession } from "./customer-auth";
 import { createMeetEvent, deleteEvent, type GcalEnv } from "./_gcal";
 import {
-  busyRanges, daySlots, effectiveWindows, ensureSupportTables, getSettings,
-  hhmmToMin, isPicType, picColumn, subtractBreak, validHHMM, wibNow,
+  daySlots, ensureSupportTables, getSettings,
+  isPicType, picColumn, validHHMM, wibNow,
 } from "./_support";
 
 interface Env extends EnvBase, GcalEnv {}
@@ -143,22 +143,11 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   if (!validHHMM(t)) return new Response(JSON.stringify({ error: "jam tidak valid" }), { status: 400, headers: cors });
   const now = wibNow();
   if (at <= now) return new Response(JSON.stringify({ error: "jadwal harus di masa depan" }), { status: 400, headers: cors });
-  // Slot harus pas di dalam availability (di luar jam istirahat & cuti) & belum terisi.
-  let wins = await effectiveWindows(env.DB, staff, day, st);
-  if (st.break_start && st.break_end) wins = subtractBreak(wins, st.break_start, st.break_end);
-  const startMin = hhmmToMin(t);
-  const inside = wins.some((w) => startMin >= hhmmToMin(w.start) && startMin + st.slot_minutes <= hhmmToMin(w.end));
-  if (!inside) {
-    return new Response(JSON.stringify({ error: "di luar jam availability PIC (termasuk istirahat/cuti)" }), { status: 400, headers: cors });
-  }
-  const busy = await busyRanges(env.DB, staff, day);
-  if (busy.some((x) => startMin < x.e && x.s < startMin + st.slot_minutes)) {
-    return new Response(JSON.stringify({ error: "slot sudah terisi — pilih jam lain" }), { status: 409, headers: cors });
-  }
-  // Sanity: slot harus cocok dengan grid yang dihitung server.
+  // Slot harus cocok grid server (di dalam availability − istirahat/cuti − terisi).
+  // Satu pengecekan ini mencakup semuanya agar hemat query.
   const grid = await daySlots(env.DB, staff, day, st.slot_minutes, now);
   if (!grid.some((g) => g.start === at)) {
-    return new Response(JSON.stringify({ error: "slot tidak tersedia — muat ulang jadwal" }), { status: 409, headers: cors });
+    return new Response(JSON.stringify({ error: "slot tidak tersedia (di luar jam/istirahat/cuti atau sudah terisi) — muat ulang jadwal" }), { status: 409, headers: cors });
   }
 
   const ts = new Date().toISOString();

@@ -12,8 +12,9 @@
 import { cors, getSession, normDivision, type EnvBase } from "./_auth";
 import { getCustomerSession } from "./customer-auth";
 import {
-  daySlots, effectiveWindows, ensureSupportTables, getSettings,
-  parseWorkDays, validDay, validHHMM, weekdayOf, wibNow,
+  effectiveWindows, ensureSupportTables, getSettings,
+  getOverrides, getTimeoffSet, parseWorkDays, slotsRange, validDay, validHHMM, weekdayOf, wibNow,
+  windowsForDay,
 } from "./_support";
 
 interface Env extends EnvBase {}
@@ -54,20 +55,13 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     return new Response(JSON.stringify({ error: "forbidden" }), { status: 403, headers: cors });
   }
 
-  // Mode slot: ?slots=1&from=YYYY-MM-DD&days=14
+  // Mode slot: ?slots=1&from=YYYY-MM-DD&days=14 (dihitung batch, ~4 query).
   if (params.get("slots") !== null) {
     const from = String(params.get("from") ?? "").slice(0, 10);
     const days = Math.max(1, Math.min(30, Math.round(Number(params.get("days") ?? 14)) || 14));
-    const st = await getSettings(env.DB);
     const startDay = validDay(from) ? from : wibNow().slice(0, 10);
-    const now = wibNow();
-    const out: { date: string; weekday: number; slots: { start: string; end: string }[] }[] = [];
-    const base = new Date(`${startDay}T12:00:00Z`).getTime();
-    for (let i = 0; i < days; i++) {
-      const day = new Date(base + i * 864e5).toISOString().slice(0, 10);
-      out.push({ date: day, weekday: weekdayOf(day), slots: await daySlots(env.DB, staff, day, st.slot_minutes, now) });
-    }
-    return Response.json({ ok: true, staff, slot_minutes: st.slot_minutes, days: out }, { headers: cors });
+    const r = await slotsRange(env.DB, staff, startDay, days, 0, wibNow());
+    return Response.json({ ok: true, staff, slot_minutes: r.slot_minutes, days: r.slots, timeoff: r.timeoff }, { headers: cors });
   }
 
   // Mode jadwal: override + efektif 7 hari ke depan.
@@ -75,11 +69,22 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     "SELECT id, weekday, start_time, end_time, active FROM support_availability WHERE staff_username = ? ORDER BY weekday ASC, start_time ASC LIMIT 100"
   ).bind(staff).all().catch(() => ({ results: [] as never[] }));
   const st = await getSettings(env.DB);
-  const week: { date: string; weekday: number; windows: { start: string; end: string }[] }[] = [];
-  const base = new Date(`${wibNow().slice(0, 10)}T12:00:00Z`).getTime();
+  const weekStart = wibNow().slice(0, 10);
+  const weekEnd = new Date(new Date(`${weekStart}T12:00:00Z`).getTime() + 6 * 864e5).toISOString().slice(0, 10);
+  const [overrides, offSet] = await Promise.all([
+    getOverrides(env.DB, staff),
+    getTimeoffSet(env.DB, staff, weekStart, weekEnd),
+  ]);
+  const week: { date: string; weekday: number; windows: { start: string; end: string }[]; timeoff: boolean }[] = [];
+  const base = new Date(`${weekStart}T12:00:00Z`).getTime();
   for (let i = 0; i < 7; i++) {
     const day = new Date(base + i * 864e5).toISOString().slice(0, 10);
-    week.push({ date: day, weekday: weekdayOf(day), windows: await effectiveWindows(env.DB, staff, day, st) });
+    week.push({
+      date: day,
+      weekday: weekdayOf(day),
+      windows: offSet.has(day) ? [] : windowsForDay(overrides, weekdayOf(day), st),
+      timeoff: offSet.has(day),
+    });
   }
   return Response.json(
     { ok: true, staff, overrides: rows.results ?? [], defaults: st, default_days: [...parseWorkDays(st.work_days)], week },

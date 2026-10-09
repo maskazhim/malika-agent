@@ -169,6 +169,95 @@ export function validDay(day: unknown): boolean {
 
 export interface DayWindow { start: string; end: string }
 
+interface OverrideRow { weekday: number; start_time: string; end_time: string }
+
+/* Semua override aktif staff dalam 1 query (untuk komputasi batch). */
+export async function getOverrides(db: D1Database, staff: string): Promise<OverrideRow[]> {
+  const rows = await db.prepare(
+    "SELECT weekday, start_time, end_time FROM support_availability WHERE staff_username = ? AND active = 1 ORDER BY weekday ASC, start_time ASC LIMIT 200"
+  ).bind(staff).all<{ weekday: number; start_time: string; end_time: string }>().catch(() => ({ results: [] as never[] }));
+  return (rows.results ?? []).filter((r) =>
+    Number.isInteger(r.weekday) && r.weekday >= 0 && r.weekday <= 6 &&
+    validHHMM(r.start_time) && validHHMM(r.end_time) && r.start_time < r.end_time
+  );
+}
+
+/* Jendela efektif murni dari data (tanpa query) — dipakai komputasi batch. */
+export function windowsForDay(overrides: OverrideRow[], wd: number, st: SupportSettings): DayWindow[] {
+  const mine = overrides.filter((r) => r.weekday === wd).map((r) => ({ start: r.start_time, end: r.end_time }));
+  if (mine.length > 0) return mine;
+  if (!parseWorkDays(st.work_days).has(wd)) return [];
+  if (!(validHHMM(st.work_start) && validHHMM(st.work_end) && st.work_start < st.work_end)) return [];
+  return [{ start: st.work_start, end: st.work_end }];
+}
+
+/* Semua booking penghuni slot dalam rentang, dikelompokkan per tanggal. */
+export async function getBusyMap(
+  db: D1Database, staff: string, fromDay: string, toDay: string
+): Promise<Record<string, { s: number; e: number }[]>> {
+  const rows = await db.prepare(
+    `SELECT substr(scheduled_at, 1, 10) AS day, scheduled_at, duration_min FROM support_bookings
+     WHERE staff_username = ? AND substr(scheduled_at, 1, 10) >= ? AND substr(scheduled_at, 1, 10) <= ?
+     AND status IN ('pending','confirmed') LIMIT 500`
+  ).bind(staff, fromDay, toDay).all<{ day: string; scheduled_at: string; duration_min: number }>()
+    .catch(() => ({ results: [] as never[] }));
+  const map: Record<string, { s: number; e: number }[]> = {};
+  for (const r of rows.results ?? []) {
+    const t = String(r.scheduled_at ?? "").slice(11, 16);
+    if (!validHHMM(t)) continue;
+    const s = hhmmToMin(t);
+    const dur = Math.max(10, Math.min(240, Math.round(Number(r.duration_min ?? 30)) || 30));
+    (map[r.day] ??= []).push({ s, e: s + dur });
+  }
+  return map;
+}
+
+/* Tanggal cuti staff dalam rentang (1 query). */
+export async function getTimeoffSet(db: D1Database, staff: string, fromDay: string, toDay: string): Promise<Set<string>> {
+  const rows = await db.prepare(
+    "SELECT date FROM support_timeoff WHERE staff_username = ? AND date >= ? AND date <= ? LIMIT 100"
+  ).bind(staff, fromDay, toDay).all<{ date: string }>().catch(() => ({ results: [] as never[] }));
+  return new Set((rows.results ?? []).map((r) => r.date));
+}
+
+/* Slot N hari ke depan dalam ~4 query total (settings, override, busy, cuti). */
+export async function slotsRange(
+  db: D1Database, staff: string, startDay: string, days: number, durMin: number, nowWib: string
+): Promise<{ slots: { date: string; weekday: number; slots: { start: string; end: string }[] }[]; timeoff: string[]; slot_minutes: number }> {
+  const st = await getSettings(db);
+  const dur = Math.max(10, Math.min(240, Math.round(durMin) || st.slot_minutes));
+  const base = new Date(`${startDay}T12:00:00Z`).getTime();
+  const lastDay = new Date(base + (days - 1) * 864e5).toISOString().slice(0, 10);
+  const [overrides, busyMap, offSet] = await Promise.all([
+    getOverrides(db, staff),
+    getBusyMap(db, staff, startDay, lastDay),
+    getTimeoffSet(db, staff, startDay, lastDay),
+  ]);
+  const breakOn = !!(st.break_start && st.break_end);
+  const out: { date: string; weekday: number; slots: { start: string; end: string }[] }[] = [];
+  for (let i = 0; i < days; i++) {
+    const day = new Date(base + i * 864e5).toISOString().slice(0, 10);
+    const wd = new Date(`${day}T12:00:00Z`).getUTCDay();
+    let daySlots: { start: string; end: string }[] = [];
+    if (!offSet.has(day)) {
+      let wins = windowsForDay(overrides, wd, st);
+      if (breakOn) wins = subtractBreak(wins, st.break_start, st.break_end);
+      const busy = busyMap[day] ?? [];
+      for (const w of wins) {
+        let t = hhmmToMin(w.start);
+        const end = hhmmToMin(w.end);
+        while (t + dur <= end) {
+          const slot = { start: `${day}T${minToHHMM(t)}`, end: `${day}T${minToHHMM(t + dur)}` };
+          if (!busy.some((x) => t < x.e && x.s < t + dur) && slot.start > nowWib) daySlots.push(slot);
+          t += dur;
+        }
+      }
+    }
+    out.push({ date: day, weekday: wd, slots: daySlots });
+  }
+  return { slots: out, timeoff: [...offSet], slot_minutes: st.slot_minutes };
+}
+
 /* Jendela efektif staff pada tanggal tsb: override aktif bila ada,
    else default settings bila weekday termasuk hari kerja. */
 export async function effectiveWindows(
@@ -202,28 +291,10 @@ export async function busyRanges(db: D1Database, staff: string, day: string): Pr
   return out;
 }
 
-/* Slot tersedia untuk staff pada tanggal (durasi menit).
-   Mengurangi jam istirahat & mengecualikan tanggal cuti. */
+/* Slot 1 tanggal (validasi POST) — lewat jalur batch yang sama. */
 export async function daySlots(
   db: D1Database, staff: string, day: string, durMin: number, nowWib: string
 ): Promise<{ start: string; end: string }[]> {
-  const st = await getSettings(db);
-  if (await isTimeoff(db, staff, day)) return [];
-  const dur = Math.max(10, Math.min(240, Math.round(durMin) || st.slot_minutes));
-  let wins = await effectiveWindows(db, staff, day, st);
-  if (st.break_start && st.break_end) wins = subtractBreak(wins, st.break_start, st.break_end);
-  if (wins.length === 0) return [];
-  const busy = await busyRanges(db, staff, day);
-  const out: { start: string; end: string }[] = [];
-  for (const w of wins) {
-    let t = hhmmToMin(w.start);
-    const end = hhmmToMin(w.end);
-    while (t + dur <= end) {
-      const slot = { start: `${day}T${minToHHMM(t)}`, end: `${day}T${minToHHMM(t + dur)}` };
-      const overlaps = busy.some((b) => t < b.e && b.s < t + dur);
-      if (!overlaps && slot.start > nowWib) out.push(slot);
-      t += dur;
-    }
-  }
-  return out;
+  const r = await slotsRange(db, staff, day, 1, durMin, nowWib);
+  return r.slots[0]?.slots ?? [];
 }
