@@ -235,7 +235,7 @@ export default function CustomerPage() {
       {view === "affiliate" ? (
         <AffiliatePanel />
       ) : view === "support" ? (
-        <SupportPanel pics={pics} orders={orders} />
+        <SupportPanel pics={pics} orders={orders} email={email} />
       ) : loading ? (
         <p className="glass mt-5 rounded-3xl p-8 text-center text-sm text-stone-500">Memuat langganan…</p>
       ) : orders.length === 0 ? (
@@ -397,9 +397,11 @@ const HOPTODESK_URL = "https://hoptodesk.com";
 function SupportPanel({
   pics,
   orders,
+  email,
 }: {
   pics: Record<string, { username: string; name: string }>;
   orders: SubOrder[];
+  email: string;
 }) {
   const [picType, setPicType] = useState<"ai_engineer" | "account_executive">("ai_engineer");
   const [days, setDays] = useState<SlotDay[]>([]);
@@ -415,19 +417,25 @@ function SupportPanel({
   const [msg, setMsg] = useState<string | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
 
   const pic = pics[picType];
 
   const loadBookings = useCallback(async () => {
     setListLoading(true);
+    setListError(null);
     try {
       const res = await fetch("/api/support-bookings");
-      if (res.ok) {
-        const data = (await res.json()) as { bookings?: Booking[] };
-        setBookings(data.bookings ?? []);
+      if (res.status === 401) {
+        setListError("Sesi habis — keluar lalu login ulang ya.");
+        setBookings([]);
+        return;
       }
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as { bookings?: Booking[] };
+      setBookings(data.bookings ?? []);
     } catch {
-      /* abaikan */
+      setListError("Gagal memuat booking. Coba muat ulang.");
     } finally {
       setListLoading(false);
     }
@@ -674,6 +682,10 @@ function SupportPanel({
       </div>
       <div className="glass-strong rounded-3xl p-6">
         <h2 className="text-base font-bold">Booking Saya</h2>
+        {email && <p className="mt-0.5 text-[11px] text-stone-400">Menampilkan booking untuk {email}</p>}
+        {listError && (
+          <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600 ring-1 ring-red-100">{listError}</p>
+        )}
         {listLoading ? (
           <p className="mt-2 text-center text-xs text-stone-500">Memuat…</p>
         ) : bookings.length === 0 ? (

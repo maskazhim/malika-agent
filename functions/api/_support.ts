@@ -61,8 +61,8 @@ export async function ensureSupportTables(db: D1Database): Promise<void> {
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT '', handled_by TEXT NOT NULL DEFAULT '')`
   ).run().catch(() => {});
-  // Self-heal kolom 0024 untuk DB lama (gagal = sudah ada, abaikan).
-  for (const col of ["gcal_event_id", "gmeet_url", "hoptodesk_id", "hoptodesk_pass"]) {
+  // Self-heal kolom 0024-0025 untuk DB lama (gagal = sudah ada, abaikan).
+  for (const col of ["gcal_event_id", "gmeet_url", "hoptodesk_id", "hoptodesk_pass", "gcal_error"]) {
     await db.prepare(`ALTER TABLE support_bookings ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`).run().catch(() => {});
   }
 }

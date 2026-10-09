@@ -1324,6 +1324,7 @@ interface SupportBooking {
   gmeet_url: string;
   hoptodesk_id: string;
   hoptodesk_pass: string;
+  gcal_error: string;
 }
 
 /* Tab Support internal: pengaturan durasi & jam kerja (admin), availability
@@ -1714,6 +1715,11 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
                   >
                     🔄 Buatkan Meet
                   </button>
+                ) : null}
+                {b.status === "confirmed" && !b.gmeet_url && b.gcal_error ? (
+                  <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-[11px] text-red-600 ring-1 ring-red-100">
+                    GCal gagal: {b.gcal_error}
+                  </p>
                 ) : null}
                 {b.hoptodesk_id ? (
                   <p className="mt-2 rounded-xl bg-violet-50 px-3 py-2 font-mono text-[11px] text-violet-900 ring-1 ring-violet-100">

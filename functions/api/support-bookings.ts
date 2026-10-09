@@ -252,13 +252,15 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
           durationMin: Number(row.duration_min) || 30,
           requestId: `bk-${id}`,
         });
-        await env.DB.prepare("UPDATE support_bookings SET gcal_event_id = ?, gmeet_url = ? WHERE id = ?")
+        await env.DB.prepare("UPDATE support_bookings SET gcal_event_id = ?, gmeet_url = ?, gcal_error = '' WHERE id = ?")
           .bind(ev.eventId, ev.meetUrl, id).run();
         gmeet_url = ev.meetUrl;
       }
     } catch (e) {
       gcal_warning = e instanceof Error ? e.message : "gagal membuat event kalender";
       console.log(`[support-bookings] gcal gagal untuk #${id}: ${gcal_warning}`);
+      await env.DB.prepare("UPDATE support_bookings SET gcal_error = ? WHERE id = ?")
+        .bind(String(gcal_warning).slice(0, 500), id).run().catch(() => {});
     }
   }
 
