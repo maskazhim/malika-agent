@@ -101,7 +101,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   if (reason) return new Response(JSON.stringify({ error: reason }), { status: 400, headers: cors });
   const email = String(b.email ?? "").trim().slice(0, 128);
   const created_at = new Date().toISOString();
-  const access_url = `https://${sub}.malika.ai`;
+  const access_url = `https://agent-${sub}.malika.ai`;
 
   // Cek tabrakan di kedua tabel (subdomains + orders) agar booking lama tetap dihormati.
   const clash =

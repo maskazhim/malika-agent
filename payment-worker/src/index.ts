@@ -34,6 +34,8 @@ interface Env {
   DB: D1Database;
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  INDOVM_LOOKUP_TOKEN?: string;
+  INDOVM_LOOKUP_URL?: string;
 }
 
 const ACTIVE_STATUSES = ["checkout", "payment_proof"];
@@ -287,18 +289,25 @@ export default {
     });
   },
 
-  /* Cron harian: reminder perpanjangan langganan (30 hari dari retensi_at).
-     H-7 dan H-1 untuk order retensi/resubscribe, sekali tiap titik
-     (dilacak via last_reminder_at = "YYYY-MM-DD|H7/H1"). */
+  /* Cron harian (02:00): 1) sinkron jatuh tempo IndoVM ke DB (sekali sehari,
+     agar UI tidak hit IndoVM tiap saat), 2) reminder perpanjangan H-7/H-1.
+     Masa aktif = server_due (vps_tempo_at) bila ada, fallback retensi_at+30h. */
   async scheduled(_event: unknown, env: Env): Promise<void> {
     if (!env.DB) {
       console.log("[payment-watcher] cron: D1 not bound");
       return;
     }
     try {
+      await syncVpsDueDates(env);
+    } catch (e) {
+      console.log(`[payment-watcher] cron sync VPS error: ${String(e).slice(0, 200)}`);
+    }
+    try {
       const { results } = await env.DB.prepare(
-        `SELECT order_id, product, nama, email, amount, retensi_at, renewal_count, last_reminder_at FROM orders
-         WHERE status IN ('retensi','resubscribe') AND retensi_at != ''`
+        `SELECT o.order_id, o.product, o.nama, o.email, o.amount, o.retensi_at,
+                o.renewal_count, o.last_reminder_at, d.vps_tempo_at
+         FROM orders o LEFT JOIN deploy_configs d ON d.order_id = o.order_id
+         WHERE o.status IN ('retensi','resubscribe') AND o.retensi_at != ''`
       ).all<{
         order_id: string;
         product: string;
@@ -308,10 +317,14 @@ export default {
         retensi_at: string;
         renewal_count: number;
         last_reminder_at: string;
+        vps_tempo_at: string;
       }>();
       const now = Date.now();
       for (const o of results ?? []) {
-        const expiry = new Date(o.retensi_at).getTime() + 30 * 864e5;
+        const serverIso = String(o.vps_tempo_at ?? "").slice(0, 10);
+        const expiry = /^\d{4}-\d{2}-\d{2}$/.test(serverIso)
+          ? new Date(`${serverIso}T00:00:00Z`).getTime()
+          : new Date(o.retensi_at).getTime() + 30 * 864e5;
         if (!Number.isFinite(expiry) || expiry <= now) continue;
         const daysLeft = Math.round((expiry - now) / 864e5);
         const tag = daysLeft <= 1 ? "H1" : daysLeft <= 7 ? "H7" : "";
@@ -330,6 +343,66 @@ export default {
     }
   },
 };
+
+/* Sinkron harian jatuh tempo IndoVM -> deploy_configs (sekali sehari).
+   Flow lookup SAMA dengan Tab Server (lihat functions/api/_indovm.ts —
+   worker tidak bisa impor file Pages, jadi mirror di sini; ubah berbarengan).
+   Best-effort: token belum diset / lookup gagal = lewati, reminder tetap jalan. */
+async function syncVpsDueDates(env: Env): Promise<void> {
+  const token = (env.INDOVM_LOOKUP_TOKEN ?? "").trim();
+  if (!token) {
+    console.log("[payment-watcher] cron sync: INDOVM_LOOKUP_TOKEN belum diset — dilewati");
+    return;
+  }
+  const url = (env.INDOVM_LOOKUP_URL || "https://flow-new.malika.ai/webhook/lookup-server-indovm").trim();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const res = await fetch(url, { headers: { Authorization: token }, signal: ctl.signal });
+    if (!res.ok) throw new Error(`lookup ${res.status}`);
+    const raw = (await res.json()) as
+      | { vps?: { service_id?: unknown; status_layanan?: unknown; periode_pembayaran?: unknown; jatuh_tempo?: unknown; akses?: { ip?: unknown }; penggunaan?: { online?: unknown } }[] }[]
+      | { vps?: { service_id?: unknown; status_layanan?: unknown; periode_pembayaran?: unknown; jatuh_tempo?: unknown; akses?: { ip?: unknown }; penggunaan?: { online?: unknown } }[] };
+    const list = Array.isArray(raw) ? raw.flatMap((g) => g.vps ?? []) : raw.vps ?? [];
+    const now = new Date().toISOString();
+    let updated = 0;
+    for (const v of list) {
+      const sid = String(v.service_id ?? "").trim();
+      if (!sid) continue;
+      const tempo = String(v.jatuh_tempo ?? "").trim().slice(0, 32);
+      const r = (await env.DB.prepare(
+        `UPDATE deploy_configs SET vps_status = ?, vps_periode = ?, vps_tempo = ?,
+          vps_tempo_at = ?, vps_ip = ?, vps_online = ?, vps_synced_at = ?, updated_at = ?
+         WHERE vps_id = ?`
+      )
+        .bind(
+          String(v.status_layanan ?? "").slice(0, 64),
+          String(v.periode_pembayaran ?? "").slice(0, 64),
+          tempo, tempoToIso(tempo),
+          String(v.akses?.ip ?? "").split(";")[0].trim().slice(0, 128),
+          v.penggunaan?.online === true ? 1 : 0,
+          now, now, sid
+        )
+        .run()) as { meta?: { changes?: number } };
+      updated += r?.meta?.changes ?? 0;
+    }
+    console.log(`[payment-watcher] cron sync VPS: ${updated}/${list.length} baris (synced_at ${now})`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function tempoToIso(t: string): string {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((t || "").trim());
+  if (!m) return "";
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (dd < 1 || dd > 31 || mm < 1 || mm > 12 || yyyy < 2000 || yyyy > 2100) return "";
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return "";
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
 
 async function sendRenewalReminder(
   env: Env,

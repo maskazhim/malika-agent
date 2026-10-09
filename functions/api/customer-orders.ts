@@ -1,6 +1,8 @@
 /* Cloudflare Pages Functions — /api/customer-orders
    Daftar langganan milik customer yang sedang login (cookie `malika_customer`).
-   - GET -> {orders: [...]} (orders + access_url client + status pipeline)
+   - GET -> {orders: [...]} (orders + access_url + status pipeline + masa aktif)
+   Masa aktif: server_due dari cache IndoVM (deploy_configs.vps_tempo_at,
+   disinkron 1x sehari) bila ada; fallback retensi_at + 30 hari.
 */
 
 import { cors } from "./_auth";
@@ -33,23 +35,14 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Batal",
 };
 
-/* Shortcut 4 layanan Malika per langganan.
-   Sumber utama: tabel deploy_configs (ditulis otomatisasi deploy eksternal),
-   kolom web_domain (agent), router_domain, connector_domain, gowa_domain.
-   Bila kolom/baris kosong (mis. gowa yang masih rencana), fallback derive
-   `{prefix}-{base}.malika.ai` dengan base = short_name, else orders.subdomain. */
+/* Akses Malika Agent per langganan (tanpa credential — customer signup sendiri).
+   Sumber utama: deploy_configs.web_domain; fallback derive agent-{base}.malika.ai
+   dengan base = short_name, else orders.subdomain. */
 export interface ServiceLink {
-  key: "agent" | "router" | "connector" | "gowa";
+  key: "agent";
   label: string;
   url: string;
 }
-
-const SERVICES: { key: ServiceLink["key"]; label: string; column: string }[] = [
-  { key: "agent", label: "Malika Agent", column: "web_domain" },
-  { key: "router", label: "Router", column: "router_domain" },
-  { key: "connector", label: "Connector", column: "connector_domain" },
-  { key: "gowa", label: "Gowa", column: "gowa_domain" },
-];
 
 function toHttps(raw: unknown): string {
   const h = String(raw ?? "")
@@ -114,53 +107,86 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     renewal_count: number;
   }[];
 
-  // Lengkapi access_url dari tabel clients (kalau credential sudah dikirim)
-  // + 4 shortcut layanan dari tabel deploy_configs (keyed by order_id).
+  // PIC staff untuk email ini (ai_engineer + retensi sebagai account executive),
+  // beserta nama untuk tampilan booking support. Best-effort.
+  let pics: Record<string, { username: string; name: string }> = {};
+  try {
+    const pa = await env.DB.prepare(
+      "SELECT ai_engineer, retensi FROM client_assignments WHERE email = ?"
+    ).bind(c.email.toLowerCase()).first<{ ai_engineer: string; retensi: string }>().catch(() => null);
+    const names = [pa?.ai_engineer, pa?.retensi].map((u) => String(u ?? "").trim()).filter(Boolean);
+    const nameMap: Record<string, string> = {};
+    if (names.length > 0) {
+      const us = await env.DB.prepare(
+        `SELECT username, name FROM users WHERE username IN (${names.map(() => "?").join(",")})`
+      ).bind(...names).all<{ username: string; name: string }>().catch(() => ({ results: [] as never[] }));
+      for (const u of us.results ?? []) nameMap[u.username] = u.name;
+    }
+    if (pa?.ai_engineer?.trim()) {
+      pics.ai_engineer = { username: pa.ai_engineer.trim(), name: nameMap[pa.ai_engineer.trim()] ?? pa.ai_engineer.trim() };
+    }
+    if (pa?.retensi?.trim()) {
+      pics.account_executive = { username: pa.retensi.trim(), name: nameMap[pa.retensi.trim()] ?? pa.retensi.trim() };
+    }
+  } catch {
+    /* abaikan — booking tetap diblok di API bila PIC kosong */
+  }
+
+  // URL akses agent + masa aktif server dari deploy_configs (keyed by order_id).
+  // Tanpa credential — customer signup sendiri. Tabel clients tidak dipakai lagi.
+  // Kolom vps_* belum ada di DB lama → catch jadi null, fallback ke derive/retensi.
   const out = await Promise.all(
     orders.map(async (o) => {
-      const cl = await env.DB.prepare("SELECT access_url, email_status FROM clients WHERE order_id = ?")
-        .bind(o.order_id)
-        .first<{ access_url: string; email_status: string }>()
-        .catch(() => null);
       // deploy_configs belum ada di DB lama → catch jadi null, fallback ke derive.
       const dep = await env.DB.prepare(
-        "SELECT short_name, web_domain, connector_domain, router_domain, gowa_domain, deploy_status FROM deploy_configs WHERE order_id = ?"
+        "SELECT short_name, web_domain, deploy_status, vps_tempo, vps_tempo_at, vps_synced_at FROM deploy_configs WHERE order_id = ?"
       )
         .bind(o.order_id)
         .first<{
           short_name: string;
           web_domain: string;
-          connector_domain: string;
-          router_domain: string;
-          gowa_domain: string;
           deploy_status: string;
+          vps_tempo: string;
+          vps_tempo_at: string;
+          vps_synced_at: string;
         }>()
         .catch(() => null);
-      const access_url = cl?.access_url ?? (o.subdomain ? `https://${o.subdomain}.malika.ai` : "");
       const base = (dep?.short_name || o.subdomain || "").trim().toLowerCase();
-      const domains: Record<string, string> = {
-        web_domain: String(dep?.web_domain ?? ""),
-        router_domain: String(dep?.router_domain ?? ""),
-        connector_domain: String(dep?.connector_domain ?? ""),
-        gowa_domain: String(dep?.gowa_domain ?? ""),
-      };
-      const services: ServiceLink[] = SERVICES.map((s) => ({
-        key: s.key,
-        label: s.label,
-        url: toHttps(domains[s.column]) || derivedUrl(base, s.key),
-      }));
+      const services: ServiceLink[] = [
+        {
+          key: "agent",
+          label: "Malika Agent",
+          url: toHttps(dep?.web_domain) || derivedUrl(base, "agent"),
+        },
+      ];
+      // Masa aktif: server_due (ISO yyyy-mm-dd) bila valid, else retensi_at + 30 hari.
+      let server_due_at = "";
+      let server_due_label = "";
+      let active_until = "";
+      const tempoAt = String(dep?.vps_tempo_at ?? "").slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(tempoAt)) {
+        server_due_at = tempoAt;
+        server_due_label = String(dep?.vps_tempo ?? tempoAt);
+        active_until = tempoAt;
+      } else if (o.retensi_at) {
+        const exp = new Date(new Date(o.retensi_at).getTime() + 30 * 864e5);
+        if (Number.isFinite(exp.getTime())) active_until = exp.toISOString().slice(0, 10);
+      }
       return {
         ...o,
         status_label: STATUS_LABEL[o.status] ?? o.status,
-        access_url,
-        credential_sent: !!cl,
+        access_url: services[0].url,
+        credential_sent: false,
         active: ["retensi", "resubscribe", "onboard", "setup_server", "verified"].includes(o.status),
         deploy_status: dep?.deploy_status ?? "",
         short_name: dep?.short_name ?? "",
+        server_due_at,
+        server_due_label,
+        active_until,
         services,
       };
     })
   );
 
-  return Response.json({ orders: out }, { headers: cors });
+  return Response.json({ orders: out, pics }, { headers: cors });
 }

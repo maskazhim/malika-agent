@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { formatRp } from "@/lib/qris";
@@ -21,6 +21,28 @@ function SuccessInner() {
   const discount = Math.max(0, Number(q.get("discount") ?? 0) || 0);
   const isTransfer = method === "transfer";
   const label = productLabel(product, months);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [portalError, setPortalError] = useState<string | null>(null);
+
+  // Masuk portal customer tanpa login: tukar order_id dengan link sekali pakai.
+  async function enterPortal() {
+    if (!orderId || portalLoading) return;
+    setPortalLoading(true);
+    setPortalError(null);
+    try {
+      const res = await fetch("/api/customer-portal-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; url?: string; error?: string } | null;
+      if (!res.ok || !data?.ok || !data.url) throw new Error(data?.error ?? "gagal");
+      window.location.href = data.url;
+    } catch (err) {
+      setPortalError(err instanceof Error ? err.message : "Gagal masuk portal.");
+      setPortalLoading(false);
+    }
+  }
 
   return (
     <main className="mx-auto w-full max-w-xl px-4 py-14 sm:px-6">
@@ -96,19 +118,28 @@ function SuccessInner() {
         </dl>
 
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+          {orderId && (
+            <button
+              onClick={enterPortal}
+              disabled={portalLoading}
+              className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+            >
+              {portalLoading ? "Membuka portal…" : "Masuk ke Portal Customer →"}
+            </button>
+          )}
           {isTransfer && orderId ? (
             <a
               href={buildTransferWaLink({ order_id: orderId, product: label, amount, nama })}
               target="_blank"
               rel="noopener noreferrer"
-              className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+              className="rounded-full bg-white/70 px-6 py-2.5 text-sm font-semibold ring-1 ring-white hover:bg-white"
             >
               Kirim Bukti via WhatsApp
             </a>
           ) : (
             <Link
               href="/"
-              className="malika-gradient rounded-full px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+              className="rounded-full bg-white/70 px-6 py-2.5 text-sm font-semibold ring-1 ring-white hover:bg-white"
             >
               Kembali ke Beranda
             </Link>
@@ -120,6 +151,16 @@ function SuccessInner() {
             Lihat Paket Lain
           </Link>
         </div>
+        {portalError && (
+          <p className="mx-auto mt-3 max-w-sm rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">
+            {portalError}
+          </p>
+        )}
+        {orderId && (
+          <p className="mx-auto mt-3 max-w-md text-[11px] leading-relaxed text-stone-400">
+            Tombol portal memakai link sekali pakai — simpan Order ID & password kamu untuk login berikutnya.
+          </p>
+        )}
       </div>
     </main>
   );

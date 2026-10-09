@@ -49,10 +49,13 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
 }
 
 // POST /api/clients — kirim credential (divisi pelaksana saat setup_server / admin).
-// Mode 1-klik (order baru): body {order_id} saja — nama/email/subdomain diambil
-// dari order, password agent digenerate acak (plain hanya dipakai untuk email,
-// yang disimpan hanya hash). Password checkout dipakai untuk login portal
-// customer (tabel customers), bukan password agent.
+// Mode auto (order baru punya subdomain): body {order_id} saja, atau
+// {order_id, password?} untuk override password custom (mis. disamakan dengan
+// password customer atas permintaan mereka). Nama/email/URL diambil dari order,
+// password agent digenerate acak bila tidak diisi (plain hanya dipakai untuk
+// email, yang disimpan hanya hash). Password checkout TIDAK bisa dipakai
+// otomatis karena yang tersimpan hanya hash SHA-256 (tak bisa dikembalikan).
+// URL agent selalu https://agent-{subdomain}.malika.ai.
 // Mode legacy (order lama tanpa subdomain): body lengkap
 // {client_name, access_url, email, password, order_id?} seperti sebelumnya.
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
@@ -75,37 +78,34 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   }
 
   const order_id = String(b.order_id ?? "").slice(0, 64);
-  const hasManualFields =
-    String(b.client_name ?? "").trim() !== "" ||
-    String(b.access_url ?? "").trim() !== "" ||
-    String(b.password ?? "") !== "";
+  const manualPassword = String(b.password ?? "");
 
   let client_name = String(b.client_name ?? "").trim().slice(0, 128);
   let access_url = String(b.access_url ?? "").trim().slice(0, 256);
   let email = String(b.email ?? "").trim().slice(0, 128);
-  let password = String(b.password ?? "");
+  let password = manualPassword;
   let subdomain = "";
 
-  // Mode 1-klik: hanya order_id, tanpa field manual.
-  if (order_id && !hasManualFields) {
-    const ord = await env.DB.prepare(
-      "SELECT nama, email, subdomain FROM orders WHERE order_id = ?"
-    )
-      .bind(order_id)
-      .first<{ nama: string; email: string; subdomain: string }>()
-      .catch(() => null);
-    if (!ord) return new Response(JSON.stringify({ error: "order tidak ditemukan" }), { status: 404, headers: cors });
-    if (!ord.subdomain) {
-      return new Response(
-        JSON.stringify({ error: "Order ini belum punya subdomain — isi manual (mode legacy)." }),
-        { status: 400, headers: cors }
-      );
+  // Mode auto: order punya subdomain → semua diambil dari order.
+  // Password opsional: diisi = pakai custom (min. 8), kosong = generate acak.
+  const ordSub = order_id
+    ? await env.DB.prepare("SELECT nama, email, subdomain FROM orders WHERE order_id = ?")
+        .bind(order_id)
+        .first<{ nama: string; email: string; subdomain: string }>()
+        .catch(() => null)
+    : null;
+  if (order_id && !ordSub) {
+    return new Response(JSON.stringify({ error: "order tidak ditemukan" }), { status: 404, headers: cors });
+  }
+  if (ordSub?.subdomain) {
+    subdomain = ordSub.subdomain;
+    client_name = (ordSub.nama || "").slice(0, 128);
+    email = (ordSub.email || "").trim().slice(0, 128);
+    access_url = `https://agent-${subdomain}.malika.ai`;
+    if (!password) password = genPassword(14);
+    else if (password.length < 8) {
+      return new Response(JSON.stringify({ error: "password minimal 8 karakter" }), { status: 400, headers: cors });
     }
-    subdomain = ord.subdomain;
-    client_name = (ord.nama || "").slice(0, 128);
-    email = (ord.email || "").trim().slice(0, 128);
-    access_url = `https://${subdomain}.malika.ai`;
-    password = genPassword(14);
     if (!client_name) return new Response(JSON.stringify({ error: "nama klien kosong di order" }), { status: 400, headers: cors });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return new Response(JSON.stringify({ error: "email order tidak valid" }), { status: 400, headers: cors });
@@ -124,7 +124,8 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       return new Response(JSON.stringify({ error: "password minimal 8 karakter" }), { status: 400, headers: cors });
     }
     const m = access_url.match(/^https?:\/\/([a-z0-9-]+)\.malika\.ai\/?$/i);
-    if (m) subdomain = m[1].toLowerCase();
+    // Kupas prefix layanan (agent-/router-/connector-/gowa-) agar subdomain dasarnya benar.
+    if (m) subdomain = m[1].toLowerCase().replace(/^(agent|router|connector|gowa)-/, "");
   }
 
   // Gate: pelaksana (support/it/ai_engineer) hanya saat order di tahap setup_server/onboard.
@@ -173,7 +174,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       // Password plain dikembalikan sekali agar admin bisa melihat/menyimpan;
       // tidak disimpan di DB (hanya hash).
       password,
-      auto: order_id !== "" && !hasManualFields,
+      auto: order_id !== "" && !!ordSub?.subdomain,
     },
     { headers: cors }
   );

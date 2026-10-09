@@ -106,21 +106,14 @@ function canCancel(me: MeUser | null, status: string): boolean {
   if (me.division === "sales" && (status === "checkout" || status === "payment_proof")) return true;
   return false;
 }
-function expiryOf(o: Order): string {
+function expiryOf(o: Order, due?: { tempo: string; tempo_at: string }): string {
+  const iso = (due?.tempo_at || "").slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    return new Date(`${iso}T00:00:00Z`).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+  }
   if (!o.retensi_at) return "-";
   const exp = new Date(new Date(o.retensi_at).getTime() + 30 * 864e5);
   return exp.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
-}
-
-interface ClientAccess {
-  id: number;
-  order_id: string;
-  client_name: string;
-  access_url: string;
-  email: string;
-  email_status: string;
-  created_at: string;
-  subdomain?: string;
 }
 
 // Field deploy_configs yang bisa diedit via popup Config (dikelompokkan).
@@ -199,8 +192,10 @@ export default function AdminPage() {
   const router = useRouter();
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
   const [me, setMe] = useState<MeUser | null>(null);
-  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users" | "affiliate" | "servers">("orders");
+  const [view, setView] = useState<"orders" | "pricing" | "logs" | "promos" | "users" | "affiliate" | "servers" | "pic" | "support">("orders");
   const [orders, setOrders] = useState<Order[]>([]);
+  const [assignMap, setAssignMap] = useState<Record<string, Record<string, string>>>({});
+  const [dueMap, setDueMap] = useState<Record<string, { tempo: string; tempo_at: string; synced_at: string }>>({});
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -213,14 +208,8 @@ export default function AdminPage() {
   const [bulkStatus, setBulkStatus] = useState("verified");
   const [bulkBusy, setBulkBusy] = useState(false);
   const headBoxRef = useRef<HTMLInputElement>(null);
-  // Menu titik-tiga (panel expandable pendorong container) + panel kredensial per order.
+  // Menu titik-tiga (panel expandable pendorong container).
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [clients, setClients] = useState<ClientAccess[]>([]);
-  const [credFor, setCredFor] = useState<string | null>(null);
-  const [credForm, setCredForm] = useState({ access_url: "", email: "", password: "" });
-  const [credSending, setCredSending] = useState(false);
-  const [credMsg, setCredMsg] = useState<string | null>(null);
-  const [sentCred, setSentCred] = useState<Record<string, { access_url: string; email: string; password: string }>>({});
   // Popup Config: edit deploy_configs per order.
   const [cfgFor, setCfgFor] = useState<string | null>(null);
   // Notes per order (cuplikan 1 baris di tabel + popup editor).
@@ -234,7 +223,8 @@ export default function AdminPage() {
   const [newNote, setNewNote] = useState("");
   const [noteSaving, setNoteSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [drafts, setDrafts] = useState<Record<number, string>>({});  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [cfgForm, setCfgForm] = useState<Record<string, string>>({});
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgSaving, setCfgSaving] = useState(false);
   const [cfgMsg, setCfgMsg] = useState<string | null>(null);
@@ -251,8 +241,14 @@ export default function AdminPage() {
           return;
         }
         if (!res.ok) throw new Error("gagal");
-        const data = (await res.json()) as { orders?: Order[] };
+        const data = (await res.json()) as {
+          orders?: Order[];
+          assignments?: Record<string, Record<string, string>>;
+          server_due?: Record<string, { tempo: string; tempo_at: string; synced_at: string }>;
+        };
         setOrders(data.orders ?? []);
+        setAssignMap(data.assignments ?? {});
+        setDueMap(data.server_due ?? {});
         // Buang pilihan yang tidak ada lagi di hasil terbaru.
         setSelected((sel) => sel.filter((id) => (data.orders ?? []).some((o) => o.order_id === id)));
       } catch {
@@ -292,13 +288,6 @@ export default function AdminPage() {
           setAuth("ok");
           void load("");
           void loadSnippets();
-          // Daftar akses klien (untuk panel kredensial per order).
-          fetch("/api/clients")
-            .then((r) => (r.ok ? r.json() : null))
-            .then((cdata: { clients?: ClientAccess[] } | null) => {
-              if (cdata?.clients) setClients(cdata.clients);
-            })
-            .catch(() => {});
         }
       })
       .catch(() => router.replace("/login"));
@@ -482,86 +471,6 @@ export default function AdminPage() {
     }
   }
 
-  // Buka panel kirim credential untuk satu order.
-  // Order baru (ada subdomain booking) → mode 1-klik, tanpa input.
-  // Order lama (tanpa subdomain) → mode legacy, isi manual subdomain + password.
-  function openCred(o: Order) {
-    closeMenu();
-    setCredMsg(null);
-    const existing = clients.find((c) => c.order_id === o.order_id);
-    setCredForm({
-      access_url: existing?.access_url ?? (o.subdomain ? `https://${o.subdomain}.malika.ai` : ""),
-      email: existing?.email || o.email,
-      password: "",
-    });
-    setCredFor(o.order_id);
-  }
-
-  // Kirim credential: simpan akses + email otomatis ke email order.
-  async function sendCred(o: Order) {
-    setCredSending(true);
-    setCredMsg(null);
-    try {
-      // Aturan tegas: 1-klik bila order punya subdomain DAN admin tidak
-      // mengisi password manual. Order lama tanpa subdomain → wajib isi manual.
-      const useOneClick = !!o.subdomain && !credForm.password;
-      const res = await fetch("/api/clients", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: useOneClick
-          ? JSON.stringify({ order_id: o.order_id })
-          : JSON.stringify({
-              client_name: o.nama,
-              access_url: credForm.access_url || (o.subdomain ? `https://${o.subdomain}.malika.ai` : ""),
-              email: credForm.email,
-              password: credForm.password,
-              order_id: o.order_id,
-            }),
-      });
-      const data = (await res.json()) as {
-        ok?: boolean;
-        id?: number;
-        error?: string;
-        email_status?: string;
-        email_error?: string;
-        access_url?: string;
-        email?: string;
-        password?: string;
-      };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
-      const finalUrl = data.access_url ?? credForm.access_url;
-      const finalEmail = data.email ?? credForm.email;
-      const finalPass = data.password ?? credForm.password;
-      setClients((cs) => [
-        {
-          id: data.id ?? 0,
-          order_id: o.order_id,
-          client_name: o.nama,
-          access_url: finalUrl,
-          email: finalEmail,
-          email_status: data.email_status ?? "sent",
-          created_at: new Date().toISOString(),
-        },
-        ...cs.filter((c) => c.order_id !== o.order_id),
-      ]);
-      // Tampilkan detail yang baru dikirim di bawah order.
-      setSentCred((s) => ({
-        ...s,
-        [o.order_id]: { access_url: finalUrl, email: finalEmail, password: finalPass },
-      }));
-      setCredForm((f) => ({ ...f, password: "" }));
-      setCredMsg(
-        data.email_status === "sent"
-          ? "Email credential terkirim ke klien."
-          : `Akses tersimpan, tapi email gagal (${data.email_error ?? "unknown"}).`
-      );
-    } catch (err) {
-      setCredMsg(err instanceof Error ? err.message : "Gagal mengirim credential.");
-    } finally {
-      setCredSending(false);
-    }
-  }
-
   // Buka popup Config: muat deploy_configs order ini (atau form kosong bila belum ada).
   async function openCfg(order_id: string) {
     closeMenu();
@@ -738,13 +647,17 @@ export default function AdminPage() {
   const isAdmin = !!me && (me.is_admin || me.division === "admin");
   const canLogs = !!me && (me.is_admin || ["admin", "support", "it", "ai_engineer", "retensi", "bisdev"].includes(me.division));
   const canServer = !!me && (me.is_admin || ["admin", "it", "ai_engineer", "bisdev"].includes(me.division));
-  const tabs = (["orders", "pricing", "logs", "promos", "affiliate", "users", "servers"] as const).filter((v) => {
+  const canAssign = !!me && (me.is_admin || me.division === "admin" || me.division === "bisdev");
+  const canSupport = !!me && (me.is_admin || ["admin", "ai_engineer", "retensi", "bisdev"].includes(me.division));
+  const tabs = (["orders", "pic", "support", "pricing", "logs", "promos", "affiliate", "users", "servers"] as const).filter((v) => {
     if (v === "orders" || v === "logs") return v === "orders" ? true : canLogs;
     if (v === "servers") return canServer;
+    if (v === "pic") return true;
+    if (v === "support") return canSupport;
     return isAdmin;
   });
   const tabLabel = (v: string): string =>
-    v === "orders" ? "Order" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : v === "affiliate" ? "Affiliate" : v === "servers" ? "Server" : "Staff";
+    v === "orders" ? "Order" : v === "pic" ? "PIC Klien" : v === "support" ? "Support" : v === "pricing" ? "Harga Paket" : v === "logs" ? "Log Pembayaran" : v === "promos" ? "Kode Promo" : v === "affiliate" ? "Affiliate" : v === "servers" ? "Server" : "Staff";
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
@@ -793,6 +706,14 @@ export default function AdminPage() {
         <UsersManager meUsername={me?.username ?? ""} />
       ) : view === "servers" && canServer ? (
         <ServerManager />
+      ) : view === "pic" ? (
+        <AssignmentsManager canAssign={canAssign} />
+      ) : view === "support" && canSupport ? (
+        <SupportManager
+          meUsername={me?.username ?? ""}
+          meDivision={me?.division ?? ""}
+          isAdmin={isAdmin}
+        />
       ) : (
         <>
       <div className="glass mt-5 flex flex-wrap gap-1 rounded-2xl p-1 text-sm font-semibold">
@@ -911,9 +832,6 @@ export default function AdminPage() {
             </thead>
             <tbody>
               {visibleOrders.map((o) => {
-                const existing = clients.find((c) => c.order_id === o.order_id);
-                const sent = sentCred[o.order_id];
-                const expanded = credFor === o.order_id;
                 return (
                 <Fragment key={o.order_id}>
                 <tr className={`border-b border-white/50 last:border-0 hover:bg-white/40 ${selected.includes(o.order_id) ? "bg-teal-50/50" : ""}`}>
@@ -930,23 +848,28 @@ export default function AdminPage() {
                     <p className="font-semibold">{o.product}</p>
                     <p className="font-mono text-[11px] text-stone-400">{o.order_id.slice(0, 8)}…</p>
                     {o.subdomain && (
-                      <p className="font-mono text-[11px] font-semibold text-teal-700">{o.subdomain}.malika.ai</p>
+                      <p className="font-mono text-[11px] font-semibold text-teal-700">agent-{o.subdomain}.malika.ai</p>
                     )}
                     <p className="text-[11px] text-stone-400">
                       {o.method === "transfer" ? "Transfer Bank" : o.method === "qris" ? "QRIS" : "-"} ·{" "}
                       {o.created_at ? new Date(o.created_at).toLocaleString("id-ID") : "-"}
                     </p>
-                    {existing && (
-                      <p className="mt-0.5 inline-block rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-semibold text-teal-800">
-                        akses {existing.email_status === "sent" ? "terkirim" : existing.email_status}
-                      </p>
-                    )}
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium">{o.nama}</p>
                     <p className="text-xs text-stone-500">{o.bisnis}</p>
                     <p className="text-xs">{o.telepon}</p>
                     <p className="text-xs text-stone-500">{o.email}</p>
+                    {(() => {
+                      const a = assignMap[(o.email || "").toLowerCase()];
+                      const ai = a?.ai_engineer || "";
+                      if (!ai) return null;
+                      return (
+                        <p className="mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800" title={`Support: ${a.support || "-"} · IT: ${a.it || "-"} · Sales: ${a.sales || "-"}`}>
+                          🤖 {ai}
+                        </p>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-bold">{formatRp(o.amount)}</p>
@@ -982,7 +905,8 @@ export default function AdminPage() {
                     {(o.status === "retensi" || o.status === "resubscribe" || o.status === "churn") && (
                       <p className="mt-1 text-[11px] text-stone-500">
                         {o.renewal_count > 0 ? `Perpanjangan ke-${o.renewal_count} · ` : ""}
-                        {o.status === "churn" ? "berhenti" : `aktif s/d ${expiryOf(o)}`}
+                        {o.status === "churn" ? "berhenti" : `aktif s/d ${expiryOf(o, dueMap[o.order_id])}`}
+                        {dueMap[o.order_id]?.tempo_at ? " · server" : ""}
                       </p>
                     )}
                   </td>
@@ -1051,12 +975,6 @@ export default function AdminPage() {
                             {o.status === "setup_server" && canFinishSetup(me) && (
                               <>
                                 <button
-                                  onClick={() => openCred(o)}
-                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
-                                >
-                                  ✉ Kirim credential
-                                </button>
-                                <button
                                   onClick={() => {
                                     void openCfg(o.order_id);
                                   }}
@@ -1069,30 +987,23 @@ export default function AdminPage() {
                                     void setStatus(o.order_id, "onboard");
                                   }}
                                   disabled={updating === o.order_id}
+                                  title="URL akses agent dikirim otomatis ke email customer"
                                   className="rounded-full bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                                 >
-                                  ✓ Setup selesai → Onboard
+                                  ✓ Setup selesai → Onboard (kirim akses)
                                 </button>
                               </>
                             )}
                             {o.status === "onboard" && canFinishOnboard(me) && (
-                              <>
-                                <button
-                                  onClick={() => openCred(o)}
-                                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100"
-                                >
-                                  ✉ Kirim credential
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    void setStatus(o.order_id, "retensi");
-                                  }}
-                                  disabled={updating === o.order_id}
-                                  className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                                >
-                                  ✓ Onboard selesai → Retensi
-                                </button>
-                              </>
+                              <button
+                                onClick={() => {
+                                  void setStatus(o.order_id, "retensi");
+                                }}
+                                disabled={updating === o.order_id}
+                                className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                              >
+                                ✓ Onboard selesai → Retensi
+                              </button>
                             )}
                             {(o.status === "retensi" || o.status === "resubscribe") && canRetensiMove(me) && (
                               <>
@@ -1136,96 +1047,6 @@ export default function AdminPage() {
                               {deleting === o.order_id ? "…" : "Hapus"}
                             </button>
                             )}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                {expanded && (
-                  <tr className="border-b border-white/50 bg-teal-50/40">
-                    <td colSpan={7} className="px-4 py-4">
-                      <div className="rounded-2xl bg-white/80 p-4 ring-1 ring-white">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-bold">Kirim credential akses</p>
-                          <button
-                            onClick={() => {
-                              setCredFor(null);
-                              setCredMsg(null);
-                            }}
-                            className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-white hover:bg-white"
-                            aria-label="Tutup"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        {existing && !sent && (
-                          <p className="mt-1 text-xs text-stone-500">
-                            Sudah pernah dikirim ke <span className="font-semibold">{existing.email}</span> ({existing.email_status}).
-                            Isi ulang untuk kirim lagi / perbarui.
-                          </p>
-                        )}
-                        {sent && (
-                          <div className="mt-2 rounded-xl bg-teal-50 p-3 text-xs ring-1 ring-teal-100">
-                            <p className="font-bold text-teal-800">Terkirim — detail di bawah ini:</p>
-                            <dl className="mt-1 space-y-0.5">
-                              <div className="flex gap-2"><dt className="w-20 text-stone-500">URL akses</dt><dd className="font-semibold">{sent.access_url}</dd></div>
-                              <div className="flex gap-2"><dt className="w-20 text-stone-500">Email</dt><dd className="font-semibold">{sent.email}</dd></div>
-                              <div className="flex gap-2"><dt className="w-20 text-stone-500">Password</dt><dd className="font-mono font-semibold">{sent.password}</dd></div>
-                            </dl>
-                          </div>
-                        )}
-                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          <label className="block">
-                            <span className="mb-1 block text-[11px] font-medium text-stone-500">URL akses</span>
-                            <input
-                              value={credForm.access_url}
-                              onChange={(e) => setCredForm((f) => ({ ...f, access_url: e.target.value }))}
-                              placeholder="kopi.malika.ai"
-                              disabled={!!o.subdomain && !credForm.password}
-                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400 disabled:bg-stone-100 disabled:text-stone-500"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="mb-1 block text-[11px] font-medium text-stone-500">Email (dari order)</span>
-                            <input
-                              value={credForm.email}
-                              onChange={(e) => setCredForm((f) => ({ ...f, email: e.target.value }))}
-                              type="email"
-                              disabled={!!o.subdomain && !credForm.password}
-                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400 disabled:bg-stone-100 disabled:text-stone-500"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="mb-1 block text-[11px] font-medium text-stone-500">
-                              Password {o.subdomain ? "(kosongkan = 1-klik generate)" : "(wajib — order lama)"}
-                            </span>
-                            <input
-                              value={credForm.password}
-                              onChange={(e) => setCredForm((f) => ({ ...f, password: e.target.value }))}
-                              placeholder={o.subdomain ? "kosongkan untuk 1-klik" : "min. 8 karakter"}
-                              className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
-                            />
-                          </label>
-                        </div>
-                        {o.subdomain && !credForm.password && (
-                          <p className="mt-2 rounded-xl bg-teal-50 px-3 py-2 text-xs font-medium text-teal-800 ring-1 ring-teal-100">
-                            Mode 1-klik: kirim ke {o.email} via https://{o.subdomain}.malika.ai — password agent digenerate otomatis. Isi password di atas hanya bila mau override manual (order lama).
-                          </p>
-                        )}
-                        {!o.subdomain && (
-                          <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
-                            Order lama tanpa booking subdomain — wajib isi URL + email + password manual.
-                          </p>
-                        )}
-                        {credFor === o.order_id && credMsg && (
-                          <p className="mt-2 text-xs font-medium text-stone-600">{credMsg}</p>
-                        )}
-                        <button
-                          onClick={() => sendCred(o)}
-                          disabled={credSending}
-                          className="malika-gradient mt-3 rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
-                        >
-                          {credSending ? "Mengirim…" : o.subdomain && !credForm.password ? "✉ Kirim credential (1-klik)" : "✉ Simpan + kirim email credential"}
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1449,6 +1270,683 @@ interface StaffUser {
 }
 
 const DIVISIONS = ["marketing", "sales", "support", "it", "ai_engineer", "retensi", "bisdev", "admin"];
+
+const PIC_DIVISIONS = ["sales", "marketing", "support", "it", "ai_engineer", "retensi"] as const;
+
+interface AssignmentRow {
+  email: string;
+  sales: string;
+  marketing: string;
+  support: string;
+  it: string;
+  ai_engineer: string;
+  retensi: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+/* PIC per customer email. AI engineer dirotasi by load (badge jumlah klien);
+   divisi lain masih 1 orang (dropdown tetap ada agar siap pembagian).
+   Ubah hanya bila canAssign (admin / bisdev) — server menegakkan juga. */
+const SUP_DAY = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+
+function fmtBooking(at: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at);
+  if (!m) return at;
+  const wd = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`).getUTCDay();
+  return `${SUP_DAY[wd]}, ${Number(m[3])}/${Number(m[2])}/${m[1]} ${m[4]}:${m[5]}`;
+}
+
+interface AvailRow {
+  id: number;
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  active: number;
+}
+
+interface WeekDay {
+  date: string;
+  weekday: number;
+  windows: { start: string; end: string }[];
+}
+
+interface SupportBooking {
+  id: number;
+  customer_email: string;
+  order_id: string;
+  staff_username: string;
+  pic_type: string;
+  scheduled_at: string;
+  duration_min: number;
+  description: string;
+  status: string;
+}
+
+/* Tab Support internal: pengaturan durasi & jam kerja (admin), availability
+   mingguan PIC (AI engineer / retensi / admin), dan booking masuk. */
+function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: string; meDivision: string; isAdmin: boolean }) {
+  const [settings, setSettings] = useState({ slot_minutes: 30, work_start: "09:00", work_end: "17:00", work_days: "1,2,3,4,5" });
+  const [setSaving, setSetSaving] = useState(false);
+  const [staffOpts, setStaffOpts] = useState<{ username: string; name: string; division: string }[]>([]);
+  const [target, setTarget] = useState(meUsername);
+  const [rows, setRows] = useState<AvailRow[]>([]);
+  const [week, setWeek] = useState<WeekDay[]>([]);
+  const [avLoading, setAvLoading] = useState(false);
+  const [form, setForm] = useState({ weekday: "1", start: "09:00", end: "17:00" });
+  const [adding, setAdding] = useState(false);
+  const [scope, setScope] = useState<"mine" | "all">("mine");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [bookings, setBookings] = useState<SupportBooking[]>([]);
+  const [bkLoading, setBkLoading] = useState(true);
+  const [acting, setActing] = useState<number | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const canEditTarget = isAdmin || (["ai_engineer", "retensi"].includes(meDivision) && target === meUsername);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/support-settings");
+      if (res.ok) {
+        const data = (await res.json()) as { settings?: typeof settings };
+        if (data.settings) setSettings(data.settings);
+      }
+    } catch {
+      /* abaikan */
+    }
+  }, []);
+
+  const loadStaff = useCallback(async () => {
+    try {
+      const res = await fetch("/api/assignments");
+      if (!res.ok) return;
+      const data = (await res.json()) as { staff?: Record<string, { username: string; name: string }[]> };
+      const opts: { username: string; name: string; division: string }[] = [];
+      for (const div of ["ai_engineer", "retensi"]) {
+        for (const u of data.staff?.[div] ?? []) opts.push({ ...u, division: div });
+      }
+      setStaffOpts(opts);
+      if (!isAdmin && ["ai_engineer", "retensi"].includes(meDivision)) setTarget(meUsername);
+      else if (isAdmin && opts.length > 0) setTarget((t) => t || opts[0].username);
+    } catch {
+      /* abaikan */
+    }
+  }, [isAdmin, meDivision, meUsername]);
+
+  const loadAvail = useCallback(async (staff: string) => {
+    if (!staff) return;
+    setAvLoading(true);
+    try {
+      const res = await fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}`);
+      if (res.ok) {
+        const data = (await res.json()) as { overrides?: AvailRow[]; week?: WeekDay[] };
+        setRows(data.overrides ?? []);
+        setWeek(data.week ?? []);
+      }
+    } catch {
+      /* abaikan */
+    } finally {
+      setAvLoading(false);
+    }
+  }, []);
+
+  const loadBookings = useCallback(async (sc: string, st: string) => {
+    setBkLoading(true);
+    try {
+      const q = `/api/support-bookings?scope=${sc}${st ? `&status=${st}` : ""}`;
+      const res = await fetch(q);
+      if (res.ok) {
+        const data = (await res.json()) as { bookings?: SupportBooking[] };
+        setBookings(data.bookings ?? []);
+      }
+    } catch {
+      /* abaikan */
+    } finally {
+      setBkLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSettings();
+    void loadStaff();
+  }, [loadSettings, loadStaff]);
+
+  useEffect(() => {
+    if (target) void loadAvail(target);
+  }, [target, loadAvail]);
+
+  useEffect(() => {
+    void loadBookings(scope, statusFilter);
+  }, [scope, statusFilter, loadBookings]);
+
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    setSetSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/support-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slot_minutes: settings.slot_minutes,
+          work_start: settings.work_start,
+          work_end: settings.work_end,
+          work_days: settings.work_days,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; settings?: typeof settings; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      if (data.settings) setSettings(data.settings);
+      setMsg("Pengaturan support disimpan.");
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSetSaving(false);
+    }
+  }
+
+  function toggleDay(d: number) {
+    const set = new Set(settings.work_days.split(",").map((x) => Number(x)).filter((n) => Number.isInteger(n)));
+    if (set.has(d)) set.delete(d);
+    else set.add(d);
+    setSettings((s) => ({ ...s, work_days: [...set].sort((a, b) => a - b).join(",") }));
+  }
+
+  async function addWindow(e: React.FormEvent) {
+    e.preventDefault();
+    setAdding(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/support-availability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staff: target, weekday: Number(form.weekday), start_time: form.start, end_time: form.end }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setMsg("Jendela availability ditambah.");
+      void loadAvail(target);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menambah.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function delWindow(id: number) {
+    if (!window.confirm("Hapus jendela ini? (kembali ikut jam default)")) return;
+    try {
+      const res = await fetch(`/api/support-availability?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("gagal");
+      void loadAvail(target);
+    } catch {
+      setMsg("Gagal menghapus.");
+    }
+  }
+
+  async function act(id: number, status: string) {
+    setActing(id);
+    try {
+      const res = await fetch("/api/support-bookings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "gagal");
+      }
+      void loadBookings(scope, statusFilter);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal update.");
+    } finally {
+      setActing(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      {isAdmin && (
+        <form onSubmit={saveSettings} className="glass-strong rounded-3xl p-6">
+          <h2 className="text-base font-bold">Pengaturan Booking Support</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Durasi sesi (menit)</span>
+              <input
+                type="number" min={10} max={240}
+                value={settings.slot_minutes}
+                onChange={(e) => setSettings((s) => ({ ...s, slot_minutes: Number(e.target.value) }))}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Jam kerja mulai</span>
+              <input
+                type="time" value={settings.work_start}
+                onChange={(e) => setSettings((s) => ({ ...s, work_start: e.target.value }))}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">Jam kerja selesai</span>
+              <input
+                type="time" value={settings.work_end}
+                onChange={(e) => setSettings((s) => ({ ...s, work_end: e.target.value }))}
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+          </div>
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-medium text-stone-500">Hari kerja default (Senin–Jumat)</p>
+            <div className="flex flex-wrap gap-1.5">
+              {SUP_DAY.map((d, i) => {
+                const on = settings.work_days.split(",").map(Number).includes(i);
+                return (
+                  <button
+                    key={d} type="button" onClick={() => toggleDay(i)}
+                    className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${on ? "bg-teal-600 text-white" : "bg-white/70 text-stone-500 ring-1 ring-white hover:bg-white"}`}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <button type="submit" disabled={setSaving} className="malika-gradient mt-4 rounded-full px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+            {setSaving ? "Menyimpan…" : "Simpan pengaturan"}
+          </button>
+        </form>
+      )}
+      <div className="glass-strong rounded-3xl p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-bold">Availability PIC</h2>
+            <p className="mt-1 text-xs text-stone-500">
+              Kosong = ikut jam default ({settings.work_start}–{settings.work_end}). Tambah jendela untuk menimpa hari tertentu.
+            </p>
+          </div>
+          {isAdmin && staffOpts.length > 0 && (
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-stone-600">
+              Staff
+              <select
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+              >
+                {staffOpts.map((u) => (
+                  <option key={u.username} value={u.username}>{u.name} · {u.division}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        {avLoading ? (
+          <p className="mt-3 text-center text-xs text-stone-500">Memuat…</p>
+        ) : (
+          <>
+            <div className="mt-3 grid gap-2 sm:grid-cols-7">
+              {week.map((d) => (
+                <div key={d.date} className="rounded-2xl bg-white/60 p-2.5 ring-1 ring-white">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                    {SUP_DAY[d.weekday]} {d.date.slice(8, 10)}/{d.date.slice(5, 7)}
+                  </p>
+                  {d.windows.length === 0 ? (
+                    <p className="mt-1 text-[11px] text-stone-400">Libur</p>
+                  ) : (
+                    d.windows.map((w, i) => (
+                      <p key={i} className="mt-1 font-mono text-[11px] font-semibold text-teal-700">{w.start}–{w.end}</p>
+                    ))
+                  )}
+                </div>
+              ))}
+            </div>
+            {canEditTarget ? (
+              <form onSubmit={addWindow} className="mt-3 flex flex-wrap items-end gap-2 rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                <label className="block">
+                  <span className="mb-1 block text-[11px] font-medium text-stone-500">Hari</span>
+                  <select value={form.weekday} onChange={(e) => setForm((f) => ({ ...f, weekday: e.target.value }))} className="rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400">
+                    {SUP_DAY.map((d, i) => (
+                      <option key={d} value={i}>{d}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] font-medium text-stone-500">Mulai</span>
+                  <input type="time" value={form.start} onChange={(e) => setForm((f) => ({ ...f, start: e.target.value }))} className="rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-teal-400" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] font-medium text-stone-500">Selesai</span>
+                  <input type="time" value={form.end} onChange={(e) => setForm((f) => ({ ...f, end: e.target.value }))} className="rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-teal-400" />
+                </label>
+                <button type="submit" disabled={adding} className="rounded-full bg-teal-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60">
+                  {adding ? "…" : "Tambah"}
+                </button>
+              </form>
+            ) : (
+              <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+                Availability diatur oleh PIC yang bersangkutan (AI engineer / retensi) atau admin.
+              </p>
+            )}
+            {rows.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {rows.map((r) => (
+                  <span key={r.id} className="rounded-full bg-white/70 px-3 py-1 font-mono text-[11px] font-semibold ring-1 ring-white">
+                    {SUP_DAY[r.weekday]} {r.start_time}–{r.end_time}
+                    {canEditTarget && (
+                      <button onClick={() => void delWindow(r.id)} title="Hapus" className="ml-1.5 text-stone-400 hover:text-red-600">✕</button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div className="glass-strong rounded-3xl p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-bold">Booking Masuk</h2>
+          <div className="flex flex-wrap gap-1.5">
+            <select
+              value={scope} onChange={(e) => setScope(e.target.value as "mine" | "all")}
+              className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+            >
+              <option value="mine">Untuk saya</option>
+              {isAdmin && <option value="all">Semua</option>}
+            </select>
+            <select
+              value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+              className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+            >
+              <option value="">Semua status</option>
+              <option value="pending">Menunggu</option>
+              <option value="confirmed">Terkonfirmasi</option>
+              <option value="done">Selesai</option>
+              <option value="cancelled">Batal</option>
+            </select>
+          </div>
+        </div>
+        {bkLoading ? (
+          <p className="mt-3 text-center text-xs text-stone-500">Memuat…</p>
+        ) : bookings.length === 0 ? (
+          <p className="mt-3 text-xs text-stone-500">Belum ada booking.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {bookings.map((b) => (
+              <div key={b.id} className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold">{fmtBooking(b.scheduled_at)} <span className="font-normal text-stone-400">· {b.duration_min} mnt</span></p>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${b.status === "pending" ? "bg-amber-100 text-amber-800" : b.status === "confirmed" ? "bg-teal-100 text-teal-800" : b.status === "done" ? "bg-stone-200 text-stone-600" : "bg-red-100 text-red-700"}`}>
+                    {b.status === "pending" ? "Menunggu" : b.status === "confirmed" ? "Terkonfirmasi" : b.status === "done" ? "Selesai" : "Batal"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-stone-500">
+                  {b.customer_email} · {b.pic_type === "ai_engineer" ? "AI Engineer" : "Account Executive"} @{b.staff_username}
+                  {b.order_id ? ` · order ${b.order_id.slice(0, 8)}` : ""}
+                </p>
+                <p className="mt-1 rounded-xl bg-white/70 px-3 py-2 text-xs text-stone-600 ring-1 ring-white">{b.description}</p>
+                {(b.status === "pending" || b.status === "confirmed") && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {b.status === "pending" && (
+                      <button onClick={() => void act(b.id, "confirmed")} disabled={acting === b.id} className="rounded-full bg-teal-600 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-700 disabled:opacity-60">
+                        ✓ Konfirmasi
+                      </button>
+                    )}
+                    {b.status === "confirmed" && (
+                      <button onClick={() => void act(b.id, "done")} disabled={acting === b.id} className="rounded-full bg-emerald-600 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+                        ✓ Selesai
+                      </button>
+                    )}
+                    <button onClick={() => void act(b.id, "cancelled")} disabled={acting === b.id} className="rounded-full bg-white px-3.5 py-1.5 text-[11px] font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-60">
+                      Batal
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
+  const [rows, setRows] = useState<AssignmentRow[]>([]);
+  const [staff, setStaff] = useState<Record<string, { username: string; name: string }[]>>({});
+  const [loads, setLoads] = useState<Record<string, number>>({});
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [newEmail, setNewEmail] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/assignments");
+      if (!res.ok) throw new Error("gagal");
+      const data = (await res.json()) as {
+        assignments?: AssignmentRow[];
+        staff?: Record<string, { username: string; name: string }[]>;
+        ai_loads?: Record<string, number>;
+      };
+      setRows(data.assignments ?? []);
+      setStaff(data.staff ?? {});
+      setLoads(data.ai_loads ?? {});
+    } catch {
+      setMsg("Gagal memuat assignment.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function draftFor(email: string): Record<string, string> {
+    return drafts[email] ?? {};
+  }
+
+  function setDraft(email: string, div: string, val: string) {
+    setDrafts((d) => ({ ...d, [email]: { ...(d[email] ?? {}), [div]: val } }));
+  }
+
+  async function save(email: string) {
+    const d = draftFor(email);
+    if (Object.keys(d).length === 0) return;
+    setSaving(email);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, ...d }),
+      });
+      const data = (await res.json()) as { ok?: boolean; assignment?: AssignmentRow; error?: string };
+      if (!res.ok || !data.ok || !data.assignment) throw new Error(data.error ?? "gagal");
+      setRows((rs) => rs.map((r) => (r.email === email ? data.assignment as AssignmentRow : r)));
+      setDrafts((x) => {
+        const copy = { ...x };
+        delete copy[email];
+        return copy;
+      });
+      setMsg(`PIC ${email} diperbarui.`);
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function addRow(e: React.FormEvent) {
+    e.preventDefault();
+    const email = newEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setMsg("Email tidak valid.");
+      return;
+    }
+    setSaving("new");
+    setMsg(null);
+    try {
+      const res = await fetch("/api/assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setNewEmail("");
+      setMsg(`Baris ${email} dibuat — pilih PIC lalu simpan.`);
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menambah.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const visible = rows.filter((r) => {
+    const s = search.trim().toLowerCase();
+    if (!s) return true;
+    return [r.email, r.sales, r.marketing, r.support, r.it, r.ai_engineer, r.retensi]
+      .join(" ").toLowerCase().includes(s);
+  });
+
+  const aiOptions = staff.ai_engineer ?? [];
+
+  return (
+    <div className="mt-4 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      {!canAssign && (
+        <p className="rounded-xl bg-amber-50 px-4 py-2 text-xs font-medium text-amber-700 ring-1 ring-amber-100">
+          Kamu hanya bisa melihat. Assign / pindah PIC khusus admin & business development.
+        </p>
+      )}
+      <div className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Beban AI Engineer (rotasi otomatis)</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          Order baru yang masuk set up server otomatis dapat AI engineer dengan beban terkecil.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {aiOptions.length === 0 ? (
+            <span className="text-xs text-stone-400">Belum ada user AI engineer aktif.</span>
+          ) : (
+            aiOptions.map((u) => (
+              <span key={u.username} className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white">
+                {u.name} <span className="font-mono text-stone-400">@{u.username}</span>
+                <span className="ml-1 rounded-full bg-teal-100 px-2 py-0.5 text-[11px] text-teal-800">{loads[u.username] ?? 0} klien</span>
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+      <div className="glass flex items-center gap-2 rounded-2xl p-2">
+        <span className="pl-2 text-sm text-stone-400">🔍</span>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cari: email customer atau nama PIC…"
+          className="w-full bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-stone-400"
+        />
+        {search && (
+          <button onClick={() => setSearch("")} className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white">✕</button>
+        )}
+      </div>
+      {canAssign && (
+        <form onSubmit={addRow} className="glass flex flex-wrap items-center gap-2 rounded-2xl p-3">
+          <input
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            placeholder="Tambah email customer…"
+            className="min-w-52 flex-1 rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+          />
+          <button type="submit" disabled={saving === "new"} className="malika-gradient rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60">
+            {saving === "new" ? "…" : "Tambah"}
+          </button>
+        </form>
+      )}
+      <div className="glass-strong overflow-x-auto rounded-3xl">
+        {loading ? (
+          <p className="p-8 text-center text-sm text-stone-500">Memuat PIC…</p>
+        ) : visible.length === 0 ? (
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada assignment. Baris dibuat otomatis saat order masuk set up server.</p>
+        ) : (
+          <table className="w-full min-w-3xl text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/70 text-xs uppercase tracking-wider text-stone-400">
+                <th className="px-4 py-3 font-semibold">Customer</th>
+                {PIC_DIVISIONS.map((d) => (
+                  <th key={d} className="px-4 py-3 font-semibold">{DIVISION_LABEL[d] ?? d}</th>
+                ))}
+                <th className="px-4 py-3 font-semibold">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((r) => {
+                const d = draftFor(r.email);
+                const dirty = Object.keys(d).length > 0;
+                return (
+                  <tr key={r.email} className="border-b border-white/50 last:border-0 hover:bg-white/40">
+                    <td className="px-4 py-3">
+                      <p className="text-xs font-semibold">{r.email}</p>
+                      <p className="text-[11px] text-stone-400">oleh {r.updated_by || "-"} · {r.updated_at ? new Date(r.updated_at).toLocaleString("id-ID") : "-"}</p>
+                    </td>
+                    {PIC_DIVISIONS.map((div) => {
+                      const opts = staff[div] ?? [];
+                      const val = d[div] ?? (r as unknown as Record<string, string>)[div] ?? "";
+                      return (
+                        <td key={div} className="px-4 py-3">
+                          {canAssign ? (
+                            <select
+                              value={val}
+                              onChange={(e) => setDraft(r.email, div, e.target.value)}
+                              className="max-w-36 rounded-xl border border-stone-200 bg-white/80 px-2 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+                            >
+                              <option value="">—</option>
+                              {opts.map((u) => (
+                                <option key={u.username} value={u.username}>
+                                  {u.name}{div === "ai_engineer" ? ` (${loads[u.username] ?? 0})` : ""}
+                                </option>
+                              ))}
+                              {val && !opts.some((u) => u.username === val) && (
+                                <option value={val}>{val} (nonaktif)</option>
+                              )}
+                            </select>
+                          ) : (
+                            <span className="text-xs">{val || "-"}</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="px-4 py-3">
+                      {canAssign && (
+                        <button
+                          onClick={() => void save(r.email)}
+                          disabled={!dirty || saving === r.email}
+                          className="rounded-full bg-teal-600 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-700 disabled:opacity-40"
+                        >
+                          {saving === r.email ? "…" : "Simpan"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function UsersManager({ meUsername }: { meUsername: string }) {
   const [users, setUsers] = useState<StaffUser[]>([]);
@@ -1750,6 +2248,13 @@ interface DeployConfig {
   gowa_domain: string;
   deploy_status: string;
   updated_at: string;
+  vps_status: string;
+  vps_periode: string;
+  vps_tempo: string;
+  vps_tempo_at: string;
+  vps_ip: string;
+  vps_online: number;
+  vps_synced_at: string;
 }
 
 const DEPLOY_STYLE: Record<string, string> = {
@@ -1810,8 +2315,9 @@ function ServerManager() {
     void load();
   }, [load]);
 
-  // Lookup status VPS IndoVM (mapping service_id = vps_id). Best-effort:
-  // tabel config tetap tampil walau lookup gagal/lambat.
+  // Flow lookup IndoVM yang sama seperti sebelumnya (GET /api/vps-status).
+  // Endpoint itu tiap sukses OTOMATIS persist ke deploy_configs, jadi habis
+  // lookup tinggal muat ulang tabel dari cache DB. Cron harian sync otomatis.
   const loadVps = useCallback(async () => {
     setVpsLoading(true);
     setVpsMsg(null);
@@ -1821,21 +2327,28 @@ function ServerManager() {
         ok?: boolean;
         vps?: Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>;
         diambil_pada?: string;
+        synced?: number;
         error?: string;
       };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
       setVps(data.vps ?? {});
       setVpsAt(data.diambil_pada ?? "");
+      await load();
+      setVpsMsg(
+        typeof data.synced === "number"
+          ? `Lookup tersimpan ke database (${data.synced} server). Sinkron otomatis harian via cron.`
+          : "Lookup selesai."
+      );
     } catch (err) {
       setVpsMsg(err instanceof Error ? err.message : "Gagal lookup VPS.");
     } finally {
       setVpsLoading(false);
     }
-  }, []);
+  }, [load]);
 
   useEffect(() => {
-    void loadVps();
-  }, [loadVps]);
+    // Tabel langsung dari cache DB (tanpa hit IndoVM tiap buka).
+  }, []);
 
   async function openEdit(order_id: string) {
     setEditMsg(null);
@@ -1892,29 +2405,44 @@ function ServerManager() {
       .includes(s);
   });
 
-  // Nilai dd/mm/yyyy -> angka yyyymmdd (invalid = paling belakang).
-  function tempoVal(t: string): number {
-    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((t || "").trim());
-    if (!m) return Number.MAX_SAFE_INTEGER;
-    return Number(m[3]) * 10000 + Number(m[2]) * 100 + Number(m[1]);
+  // Nilai ISO yyyy-mm-dd -> angka yyyymmdd (invalid = paling belakang).
+  // Sumber utama cache DB (vps_tempo_at), fallback tempo dd/mm/yyyy live.
+  function tempoVal(c: DeployConfig): number {
+    const iso = (c.vps_tempo_at || "").slice(0, 10);
+    let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if (m) return Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]);
+    const t = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((vpsOf(c)?.tempo || "").trim());
+    if (!t) return Number.MAX_SAFE_INTEGER;
+    return Number(t[3]) * 10000 + Number(t[2]) * 100 + Number(t[1]);
   }
 
   function vpsOf(c: DeployConfig) {
-    return c.vps_id ? vps[String(c.vps_id)] : undefined;
+    const live = c.vps_id ? vps[String(c.vps_id)] : undefined;
+    if (live) return live;
+    // Cache DB sebagai objek tampilan yang sama.
+    if (c.vps_tempo || c.vps_status || c.vps_periode || c.vps_ip) {
+      return {
+        status: c.vps_status || "",
+        periode: c.vps_periode || "",
+        tempo: c.vps_tempo || "",
+        ip: c.vps_ip || "",
+        online: (c.vps_online ?? 0) === 1,
+      };
+    }
+    return undefined;
   }
 
   const sorted = [...visible].sort((a, b) => {
-    const va = vpsOf(a);
-    const vb = vpsOf(b);
     switch (sortKey) {
       case "server_asc":
         return (a.server_name || "").localeCompare(b.server_name || "", "id");
       case "tempo":
-        return tempoVal(va?.tempo ?? "") - tempoVal(vb?.tempo ?? "");
+        return tempoVal(a) - tempoVal(b);
       default:
         return (a.client_name || "").localeCompare(b.client_name || "", "id");
     }
   });
+  const lastSync = visible.map((c) => c.vps_synced_at || "").filter(Boolean).sort().pop() || vpsAt;
 
   return (
     <div className="mt-4">
@@ -1929,7 +2457,7 @@ function ServerManager() {
         <button
           onClick={() => void loadVps()}
           disabled={vpsLoading}
-          title="Refresh status VPS dari IndoVM"
+          title="Lookup ulang dari IndoVM (hasilnya disimpan ke database)"
           className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
         >
           {vpsLoading ? "…" : "🔄 Reload"}
@@ -1958,9 +2486,9 @@ function ServerManager() {
       {error && (
         <p className="mt-4 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-600 ring-1 ring-red-100">{error}</p>
       )}
-      {(vpsMsg || vpsAt) && (
+      {(vpsMsg || lastSync) && (
         <p className="mt-4 rounded-xl bg-stone-100 px-3 py-2 text-xs font-medium text-stone-500 ring-1 ring-stone-200">
-          {vpsMsg ?? `Status VPS per ${new Date(vpsAt).toLocaleString("id-ID")}`}
+          {vpsMsg ?? `Jatuh tempo dari database (sinkron harian) — terakhir ${new Date(lastSync).toLocaleString("id-ID")}`}
         </p>
       )}
       <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">

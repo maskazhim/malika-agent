@@ -432,7 +432,7 @@ function PaymentInner() {
               ["Bisnis", bisnis],
               ["Telepon", telepon],
               ["Email", email],
-              ["Subdomain", subdomain ? `${subdomain}.malika.ai` : "-"],
+              ["Subdomain", subdomain ? `agent-${subdomain}.malika.ai` : "-"],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-stone-500">{k}</dt>

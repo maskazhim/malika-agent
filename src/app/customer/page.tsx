@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatRp } from "@/lib/qris";
+import { buildTransferWaLink } from "@/lib/orders";
 
 interface ServiceLink {
   key: string;
@@ -29,6 +30,9 @@ interface SubOrder {
   active: boolean;
   deploy_status: string;
   short_name: string;
+  server_due_at: string;
+  server_due_label: string;
+  active_until: string;
   services: ServiceLink[];
 }
 
@@ -45,70 +49,87 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 function expiryOf(o: SubOrder): string {
+  const iso = (o.active_until || o.server_due_at || "").slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    return new Date(`${iso}T00:00:00Z`).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+  }
   if (!o.retensi_at) return "-";
   const exp = new Date(new Date(o.retensi_at).getTime() + 30 * 864e5);
   return exp.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/* Shortcut 4 layanan Malika (Agent, Router, Connector, Gowa).
-   URL dari API (deploy_configs), fallback derive sudah dihitung di server.
-   Gowa yang masih rencana tetap tampil (URL derivasi). */
-function ServiceShortcuts({ services, deployStatus }: { services: ServiceLink[]; deployStatus: string }) {
-  const [copied, setCopied] = useState<string | null>(null);
-  if (!services || services.length === 0) return null;
+function OrderId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard?.writeText(id).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <span className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-stone-400">
+      <span className="truncate" title={id}>Order {id}</span>
+      <button onClick={copy} title="Salin order ID" className="shrink-0 rounded px-1 hover:bg-white hover:text-stone-700">
+        {copied ? "✓" : "⧉"}
+      </button>
+    </span>
+  );
+}
+
+/* Layanan Malika (panel shortcut + tombol akses agent) hanya tampil setelah
+   set up selesai. Sebelum itu kartu hanya menunjukkan detail order + status. */
+const SETUP_DONE = ["onboard", "retensi", "resubscribe"];
+
+/* Akses Malika Agent — hanya tampil setelah set up selesai.
+   URL dari API (deploy_configs.web_domain), fallback derive di server.
+   Tanpa credential: customer signup sendiri saat pertama membuka URL. */
+function AgentAccess({ url, deployStatus }: { url: string; deployStatus: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!url) return null;
   const deleted = deployStatus === "deleted";
 
-  function copy(url: string, key: string) {
+  function copy() {
     navigator.clipboard?.writeText(url).catch(() => {});
-    setCopied(key);
-    setTimeout(() => setCopied(null), 1500);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   }
 
   return (
     <div className="mt-4 rounded-2xl bg-white/60 p-3 ring-1 ring-white">
       <p className="px-1 text-[11px] font-semibold uppercase tracking-widest text-teal-700">
-        Layanan Malika saya
+        Malika Agent saya
       </p>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {services.map((s) => (
-          <div key={s.key} className="rounded-xl bg-white/80 px-3 py-2 ring-1 ring-white">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-bold">{s.label}</p>
-              {deleted ? (
-                <span className="rounded-full bg-stone-200 px-2.5 py-0.5 text-[11px] font-semibold text-stone-500">
-                  Nonaktif
-                </span>
-              ) : s.url ? (
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-full bg-teal-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-teal-700"
-                >
-                  Buka →
-                </a>
-              ) : (
-                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
-                  Menyusul
-                </span>
-              )}
-            </div>
-            {s.url && !deleted ? (
-              <div className="mt-1 flex items-center gap-1.5">
-                <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-500">
-                  {s.url.replace(/^https?:\/\//, "")}
-                </code>
-                <button
-                  onClick={() => copy(s.url, s.key)}
-                  className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-white"
-                >
-                  {copied === s.key ? "✓" : "Salin"}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ))}
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-white/80 px-3 py-2.5 ring-1 ring-white">
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-stone-600">
+          {url.replace(/^https?:\/\//, "")}
+        </code>
+        {deleted ? (
+          <span className="rounded-full bg-stone-200 px-3 py-1 text-[11px] font-semibold text-stone-500">
+            Nonaktif
+          </span>
+        ) : (
+          <>
+            <button
+              onClick={copy}
+              className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-[11px] font-semibold text-stone-500 ring-1 ring-stone-200 hover:bg-white"
+            >
+              {copied ? "Tersalin ✓" : "Salin"}
+            </button>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="malika-gradient shrink-0 rounded-full px-5 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Buka Agent →
+            </a>
+          </>
+        )}
       </div>
+      {!deleted && (
+        <p className="mt-1.5 px-1 text-[11px] leading-relaxed text-stone-400">
+          Pertama kali dibuka? Silakan signup / buat akun kamu langsung di halaman tersebut.
+        </p>
+      )}
     </div>
   );
 }
@@ -118,8 +139,9 @@ export default function CustomerPage() {
   const [auth, setAuth] = useState<"checking" | "ok">("checking");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [view, setView] = useState<"orders" | "affiliate">("orders");
+  const [view, setView] = useState<"orders" | "affiliate" | "support">("orders");
   const [orders, setOrders] = useState<SubOrder[]>([]);
+  const [pics, setPics] = useState<Record<string, { username: string; name: string }>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -133,8 +155,12 @@ export default function CustomerPage() {
         return;
       }
       if (!res.ok) throw new Error("gagal");
-      const data = (await res.json()) as { orders?: SubOrder[] };
+      const data = (await res.json()) as {
+        orders?: SubOrder[];
+        pics?: Record<string, { username: string; name: string }>;
+      };
       setOrders(data.orders ?? []);
+      setPics(data.pics ?? {});
     } catch {
       setError("Gagal memuat langganan. Coba muat ulang.");
     } finally {
@@ -193,7 +219,7 @@ export default function CustomerPage() {
       )}
 
       <div className="glass mt-5 flex gap-1 rounded-2xl p-1 text-sm font-semibold">
-        {(["orders", "affiliate"] as const).map((v) => (
+        {(["orders", "support", "affiliate"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -201,13 +227,15 @@ export default function CustomerPage() {
               view === v ? "malika-gradient text-white shadow" : "text-stone-500 hover:bg-white/70 hover:text-stone-900"
             }`}
           >
-            {v === "orders" ? "Langganan" : "Affiliate"}
+            {v === "orders" ? "Langganan" : v === "support" ? "Booking Support" : "Affiliate"}
           </button>
         ))}
       </div>
 
       {view === "affiliate" ? (
         <AffiliatePanel />
+      ) : view === "support" ? (
+        <SupportPanel pics={pics} orders={orders} />
       ) : loading ? (
         <p className="glass mt-5 rounded-3xl p-8 text-center text-sm text-stone-500">Memuat langganan…</p>
       ) : orders.length === 0 ? (
@@ -222,11 +250,11 @@ export default function CustomerPage() {
           {orders.map((o) => (
             <div key={o.order_id} className="glass-strong rounded-3xl p-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="text-base font-bold">{o.product}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-stone-400">Order {o.order_id.slice(0, 8)}…</p>
+                  <OrderId id={o.order_id} />
                   {o.subdomain && (
-                    <p className="mt-0.5 font-mono text-xs font-semibold text-teal-700">{o.subdomain}.malika.ai</p>
+                    <p className="mt-0.5 font-mono text-xs font-semibold text-teal-700">agent-{o.subdomain}.malika.ai</p>
                   )}
                 </div>
                 <span
@@ -237,15 +265,28 @@ export default function CustomerPage() {
               </div>
               <dl className="mt-3 space-y-1.5 text-sm">
                 <div className="flex justify-between gap-3">
+                  <dt className="text-stone-500">Langganan</dt>
+                  <dd className="text-right font-semibold">{o.product}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-stone-500">Email terdaftar</dt>
+                  <dd className="text-right font-medium">{o.email}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-stone-500">Status</dt>
+                  <dd className="text-right font-medium">{o.status_label}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
                   <dt className="text-stone-500">Total</dt>
                   <dd className="font-bold">{formatRp(o.amount)}</dd>
                 </div>
-                {(o.status === "retensi" || o.status === "resubscribe") && (
+                {(o.active || o.status === "retensi" || o.status === "resubscribe" || o.status === "onboard") && (
                   <div className="flex justify-between gap-3">
-                    <dt className="text-stone-500">Aktif s/d</dt>
-                    <dd className="font-medium">
+                    <dt className="text-stone-500">Masa aktif s/d</dt>
+                    <dd className="text-right font-medium">
                       {expiryOf(o)}
                       {o.renewal_count > 0 ? ` (perpanjangan ke-${o.renewal_count})` : ""}
+                      {o.server_due_at ? " · server" : ""}
                     </dd>
                   </div>
                 )}
@@ -270,20 +311,23 @@ export default function CustomerPage() {
                   </p>
                 )}
               </dl>
-              {(o.short_name || o.subdomain || (o.services ?? []).some((s) => s.url)) && (
-                <ServiceShortcuts services={o.services ?? []} deployStatus={o.deploy_status ?? ""} />
+              {SETUP_DONE.includes(o.status) && (
+                <AgentAccess
+                  url={(o.services ?? []).find((s) => s.key === "agent")?.url ?? ""}
+                  deployStatus={o.deploy_status ?? ""}
+                />
               )}
               <div className="mt-4 flex flex-wrap gap-2">
-                {o.credential_sent && o.access_url ? (
+                {o.status === "checkout" ? (
                   <a
-                    href={o.access_url}
+                    href={buildTransferWaLink({ order_id: o.order_id, product: o.product, amount: o.amount, nama: o.nama })}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="malika-gradient rounded-full px-5 py-2 text-xs font-semibold text-white hover:opacity-90"
                   >
-                    Buka Malika Agent Saya →
+                    Konfirmasi Pembayaran →
                   </a>
-                ) : o.active ? (
+                ) : o.active && !SETUP_DONE.includes(o.status) ? (
                   <span className="rounded-full bg-white/70 px-5 py-2 text-xs font-semibold text-stone-500 ring-1 ring-white">
                     Akses menyusul via email
                   </span>
@@ -302,6 +346,311 @@ export default function CustomerPage() {
         </div>
       )}
     </main>
+  );
+}
+
+const ID_DAY = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+const ID_MONTH = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+/* "YYYY-MM-DDTHH:MM" -> "Sen, 12 Okt · 09:00" (tanpa konversi zona). */
+function fmtSlot(at: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at);
+  if (!m) return at;
+  const wd = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`).getUTCDay();
+  return `${ID_DAY[wd]}, ${Number(m[3])} ${ID_MONTH[Number(m[2]) - 1]} · ${m[4]}:${m[5]}`;
+}
+
+const BOOKING_STYLE: Record<string, string> = {
+  pending: "bg-amber-100 text-amber-800",
+  confirmed: "bg-teal-100 text-teal-800",
+  done: "bg-stone-200 text-stone-600",
+  cancelled: "bg-red-100 text-red-700",
+};
+const BOOKING_LABEL: Record<string, string> = {
+  pending: "Menunggu konfirmasi",
+  confirmed: "Terkonfirmasi",
+  done: "Selesai",
+  cancelled: "Batal",
+};
+
+interface SlotDay {
+  date: string;
+  weekday: number;
+  slots: { start: string; end: string }[];
+}
+
+interface Booking {
+  id: number;
+  order_id: string;
+  staff_username: string;
+  pic_type: string;
+  scheduled_at: string;
+  duration_min: number;
+  description: string;
+  status: string;
+}
+
+function SupportPanel({
+  pics,
+  orders,
+}: {
+  pics: Record<string, { username: string; name: string }>;
+  orders: SubOrder[];
+}) {
+  const [picType, setPicType] = useState<"ai_engineer" | "account_executive">("ai_engineer");
+  const [days, setDays] = useState<SlotDay[]>([]);
+  const [slotMin, setSlotMin] = useState(30);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slot, setSlot] = useState("");
+  const [desc, setDesc] = useState("");
+  const [orderId, setOrderId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+
+  const pic = pics[picType];
+
+  const loadBookings = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const res = await fetch("/api/support-bookings");
+      if (res.ok) {
+        const data = (await res.json()) as { bookings?: Booking[] };
+        setBookings(data.bookings ?? []);
+      }
+    } catch {
+      /* abaikan */
+    } finally {
+      setListLoading(false);
+    }
+  }, []);
+
+  const loadSlots = useCallback(async (staff: string) => {
+    if (!staff) {
+      setDays([]);
+      return;
+    }
+    setSlotsLoading(true);
+    try {
+      const res = await fetch(`/api/support-availability?staff=${encodeURIComponent(staff)}&slots=1&days=14`);
+      if (res.ok) {
+        const data = (await res.json()) as { days?: SlotDay[]; slot_minutes?: number };
+        setDays(data.days ?? []);
+        setSlotMin(Number(data.slot_minutes ?? 30));
+      }
+    } catch {
+      /* abaikan */
+    } finally {
+      setSlotsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBookings();
+  }, [loadBookings]);
+
+  useEffect(() => {
+    setSlot("");
+    if (pic?.username) void loadSlots(pic.username);
+    else setDays([]);
+  }, [pic?.username, loadSlots]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pic?.username || !slot) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/support-bookings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pic_type: picType,
+          staff_username: pic.username,
+          scheduled_at: slot,
+          order_id: orderId || undefined,
+          description: desc,
+        }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setSlot("");
+      setDesc("");
+      setMsg("Booking terkirim — PIC akan konfirmasi jadwalmu.");
+      void loadBookings();
+      void loadSlots(pic.username);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal booking.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function cancel(id: number) {
+    if (!window.confirm("Batalkan booking ini?")) return;
+    try {
+      const res = await fetch("/api/support-bookings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status: "cancelled" }),
+      });
+      if (!res.ok) throw new Error("gagal");
+      void loadBookings();
+      if (pic?.username) void loadSlots(pic.username);
+    } catch {
+      setMsg("Gagal membatalkan.");
+    }
+  }
+
+  return (
+    <div className="mt-5 space-y-3">
+      {msg && (
+        <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
+      )}
+      <div className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Booking Jadwal Support</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          Pilih PIC, jam yang tersedia, lalu jelaskan kebutuhan support kamu. Durasi sesi {slotMin} menit.
+        </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {(["ai_engineer", "account_executive"] as const).map((t) => {
+            const p = pics[t];
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setPicType(t)}
+                className={`rounded-2xl p-4 text-left ring-1 transition ${
+                  picType === t ? "bg-teal-600 text-white ring-teal-600" : "bg-white/60 ring-white hover:bg-white"
+                }`}
+              >
+                <p className="text-[11px] font-semibold uppercase tracking-widest opacity-70">
+                  {t === "ai_engineer" ? "AI Engineer" : "Account Executive"}
+                </p>
+                <p className="mt-1 text-sm font-bold">{p ? p.name : "Belum ditentukan"}</p>
+                {p && <p className="font-mono text-[11px] opacity-70">@{p.username}</p>}
+              </button>
+            );
+          })}
+        </div>
+        {!pic ? (
+          <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+            PIC untuk peran ini belum ditentukan — hubungi support Malika.
+          </p>
+        ) : (
+          <form onSubmit={submit} className="mt-4 space-y-3">
+            {orders.length > 1 && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-stone-500">Langganan terkait (opsional)</span>
+                <select
+                  value={orderId}
+                  onChange={(e) => setOrderId(e.target.value)}
+                  className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+                >
+                  <option value="">— Umum (tidak spesifik order) —</option>
+                  {orders.map((o) => (
+                    <option key={o.order_id} value={o.order_id}>
+                      {o.product} · {o.order_id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div>
+              <p className="mb-1 text-xs font-medium text-stone-500">Pilih jadwal (14 hari ke depan)</p>
+              {slotsLoading ? (
+                <p className="rounded-xl bg-white/60 px-3 py-3 text-center text-xs text-stone-500 ring-1 ring-white">
+                  Memuat jadwal {pic.name}…
+                </p>
+              ) : days.every((d) => d.slots.length === 0) ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-100">
+                  Belum ada slot tersedia 14 hari ke depan — coba lagi nanti atau hubungi support.
+                </p>
+              ) : (
+                <div className="max-h-64 space-y-3 overflow-y-auto rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                  {days.filter((d) => d.slots.length > 0).map((d) => (
+                    <div key={d.date}>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-stone-400">
+                        {ID_DAY[d.weekday]}, {Number(d.date.slice(8, 10))} {ID_MONTH[Number(d.date.slice(5, 7)) - 1]}
+                      </p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {d.slots.map((s) => (
+                          <button
+                            key={s.start}
+                            type="button"
+                            onClick={() => setSlot(s.start)}
+                            className={`rounded-full px-3 py-1.5 font-mono text-[11px] font-semibold transition ${
+                              slot === s.start
+                                ? "bg-teal-600 text-white"
+                                : "bg-white ring-1 ring-stone-200 hover:ring-teal-400"
+                            }`}
+                          >
+                            {s.start.slice(11, 16)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">
+                Kebutuhan support <span className="text-stone-400">(min. 10 karakter)</span>
+              </span>
+              <textarea
+                value={desc}
+                onChange={(e) => setDesc(e.target.value)}
+                rows={3}
+                placeholder="cth. Minta bantuan setting auto-reply katalog jam 9 pagi + training singkat tim CS…"
+                className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={saving || !slot || desc.trim().length < 10}
+              className="malika-gradient w-full rounded-full py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "Mengirim…" : slot ? `Booking ${fmtSlot(slot)}` : "Pilih jam dulu"}
+            </button>
+          </form>
+        )}
+      </div>
+      <div className="glass-strong rounded-3xl p-6">
+        <h2 className="text-base font-bold">Booking Saya</h2>
+        {listLoading ? (
+          <p className="mt-2 text-center text-xs text-stone-500">Memuat…</p>
+        ) : bookings.length === 0 ? (
+          <p className="mt-2 text-xs text-stone-500">Belum ada booking.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {bookings.map((b) => (
+              <div key={b.id} className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold">{fmtSlot(b.scheduled_at)} <span className="font-normal text-stone-400">· {b.duration_min} mnt</span></p>
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${BOOKING_STYLE[b.status] ?? "bg-stone-200 text-stone-600"}`}>
+                    {BOOKING_LABEL[b.status] ?? b.status}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-stone-500">
+                  {b.pic_type === "ai_engineer" ? "AI Engineer" : "Account Executive"} · @{b.staff_username}
+                </p>
+                <p className="mt-1 text-xs text-stone-600">{b.description}</p>
+                {(b.status === "pending" || b.status === "confirmed") && (
+                  <button
+                    onClick={() => void cancel(b.id)}
+                    className="mt-2 rounded-full bg-white px-4 py-1.5 text-[11px] font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50"
+                  >
+                    Batalkan
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

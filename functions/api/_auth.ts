@@ -218,6 +218,11 @@ export function canManageUsers(s: Session): boolean {
   return s.is_admin || s.division === "admin";
 }
 
+/* Assign / pindah PIC staff per klien: admin + business development. */
+export function canAssignStaff(s: Session): boolean {
+  return s.is_admin || s.division === "admin" || s.division === "bisdev";
+}
+
 export const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, GET, PATCH, DELETE, OPTIONS",

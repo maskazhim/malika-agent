@@ -247,7 +247,7 @@ export default function Pricing() {
     const t = setTimeout(() => {
       void checkSubdomain(sub).then((r) => {
         setSubOk(r.available);
-        setSubMsg(r.available ? `${sub}.malika.ai tersedia ✓` : (r.reason ?? "Subdomain sudah dipakai."));
+        setSubMsg(r.available ? `agent-${sub}.malika.ai tersedia ✓` : (r.reason ?? "Subdomain sudah dipakai."));
         setSubChecking(false);
       });
     }, 500);
@@ -368,11 +368,11 @@ export default function Pricing() {
                 ) : subMsg ? (
                   <p className={`mt-1 text-xs font-medium ${subOk ? "text-teal-700" : "text-red-600"}`}>{subMsg}</p>
                 ) : (
-                  <p className="mt-1 text-xs text-stone-400">Pilih nama unik untuk agent kamu, mis. kopinusantara.malika.ai</p>
+                  <p className="mt-1 text-xs text-stone-400">Pilih nama unik untuk agent kamu, mis. agent-kopinusantara.malika.ai</p>
                 )}
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-stone-500">Password (untuk login agent & portal)</span>
+                <span className="mb-1 block text-xs font-medium text-stone-500">Password (untuk login portal customer)</span>
                 <input
                   value={form.password}
                   onChange={set("password")}

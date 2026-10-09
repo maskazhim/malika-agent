@@ -100,7 +100,34 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   const { results } = await env.DB.prepare(query)
     .bind(...vals)
     .all();
-  return Response.json({ orders: results }, { headers: cors });
+  const orders = (results ?? []) as Record<string, unknown>[];
+  // Enrichment best-effort: cache jatuh tempo server + assignment PIC.
+  // Tabel/kolom belum ada di DB lama → catch jadi map kosong.
+  let serverDue: Record<string, { tempo: string; tempo_at: string; synced_at: string }> = {};
+  let assignByEmail: Record<string, Record<string, string>> = {};
+  try {
+    const ids = orders.map((o) => String(o.order_id ?? "")).filter(Boolean).slice(0, 200);
+    if (ids.length > 0) {
+      const dc = await env.DB.prepare(
+        `SELECT order_id, vps_tempo, vps_tempo_at, vps_synced_at FROM deploy_configs WHERE order_id IN (${ids.map(() => "?").join(",")})`
+      ).bind(...ids).all<{ order_id: string; vps_tempo: string; vps_tempo_at: string; vps_synced_at: string }>().catch(() => ({ results: [] as never[] }));
+      for (const r of dc.results ?? []) {
+        serverDue[r.order_id] = { tempo: r.vps_tempo ?? "", tempo_at: r.vps_tempo_at ?? "", synced_at: r.vps_synced_at ?? "" };
+      }
+    }
+    const emails = [...new Set(orders.map((o) => String(o.email ?? "").trim().toLowerCase()).filter((e) => e.includes("@")))].slice(0, 200);
+    if (emails.length > 0) {
+      const as = await env.DB.prepare(
+        `SELECT * FROM client_assignments WHERE email IN (${emails.map(() => "?").join(",")})`
+      ).bind(...emails).all<Record<string, string>>().catch(() => ({ results: [] as never[] }));
+      for (const r of as.results ?? []) {
+        if (r.email) assignByEmail[String(r.email).toLowerCase()] = r;
+      }
+    }
+  } catch {
+    /* abaikan — response tetap berisi orders */
+  }
+  return Response.json({ orders, server_due: serverDue, assignments: assignByEmail }, { headers: cors });
 }
 
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
@@ -191,7 +218,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
        VALUES (?, ?, ?, 'reserved', ?, ?)
        ON CONFLICT(subdomain) DO UPDATE SET order_id=excluded.order_id, email=excluded.email`
     )
-      .bind(subdomain, order_id, row.email, `https://${subdomain}.malika.ai`, new Date().toISOString())
+      .bind(subdomain, order_id, row.email, `https://agent-${subdomain}.malika.ai`, new Date().toISOString())
       .run()
       .catch(() => {});
   }
@@ -451,7 +478,125 @@ async function patchOneOrder(
       console.log(`[orders] email verified gagal: ${String(e).slice(0, 200)}`);
     }
   }
+
+  // Order pindah setup_server -> onboard: setup selesai → kirim URL akses agent
+  // otomatis (tanpa credential; customer signup sendiri). Best-effort.
+  if (changed.includes("status") && status === "onboard" && before.status === "setup_server") {
+    try {
+      const order = await env.DB.prepare(
+        "SELECT order_id, nama, email, subdomain FROM orders WHERE order_id = ?"
+      )
+        .bind(order_id)
+        .first<{ order_id: string; nama: string; email: string; subdomain: string }>();
+      const dep = await env.DB.prepare(
+        "SELECT short_name, web_domain FROM deploy_configs WHERE order_id = ?"
+      )
+        .bind(order_id)
+        .first<{ short_name: string; web_domain: string }>()
+        .catch(() => null);
+      const base = (dep?.short_name || order?.subdomain || "").trim().toLowerCase();
+      const host = String(dep?.web_domain ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/\/+$/, "");
+      const access_url = host.includes(".")
+        ? `https://${host}`
+        : base
+          ? `https://agent-${base}.malika.ai`
+          : "";
+      if (order && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email) && access_url) {
+        const { agentAccessMail, fetchOnboardingPdf, sendMail } = await import("./_email");
+        const pdf = await fetchOnboardingPdf();
+        const mail = await sendMail(env, {
+          to: order.email,
+          ...agentAccessMail({ client_name: order.nama, access_url }),
+          attachments: pdf ? [pdf] : [],
+        });
+        console.log(`[orders] email akses agent ke ${order.email}: ${mail.ok ? "sent" : mail.error}`);
+      } else {
+        console.log(`[orders] email akses agent dilewati untuk ${order_id} (email/url tak lengkap)`);
+      }
+    } catch (e) {
+      console.log(`[orders] email akses agent gagal: ${String(e).slice(0, 200)}`);
+    }
+  }
+  // Order masuk setup_server: pastikan assignment PIC per customer email ada.
+  // AI engineer dirotasi by load bila kosong; divisi lain diisi single-person.
+  // Best-effort — kegagalan assign tidak menggagalkan pindah status.
+  if (changed.includes("status") && status === "setup_server") {
+    try {
+      await ensureAssignment(env, order_id, s.username);
+    } catch (e) {
+      console.log(`[orders] auto-assign ${order_id} dilewati: ${String(e).slice(0, 200)}`);
+    }
+  }
   return changed;
+}
+
+/* Assignment PIC per customer email (auto saat masuk setup_server).
+   - Baris dibuat bila belum ada; divisi single-person diisi user aktif pertama.
+   - ai_engineer kosong → user ai_engineer aktif dengan load (COUNT) terkecil. */
+async function ensureAssignment(env: Env, order_id: string, by: string): Promise<void> {
+  const ord = await env.DB.prepare("SELECT email FROM orders WHERE order_id = ?")
+    .bind(order_id)
+    .first<{ email: string }>()
+    .catch(() => null);
+  const email = String(ord?.email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS client_assignments (
+      email TEXT PRIMARY KEY, sales TEXT NOT NULL DEFAULT '', marketing TEXT NOT NULL DEFAULT '',
+      support TEXT NOT NULL DEFAULT '', it TEXT NOT NULL DEFAULT '',
+      ai_engineer TEXT NOT NULL DEFAULT '', retensi TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '')`
+  ).run().catch(() => {});
+  const cur = await env.DB.prepare("SELECT * FROM client_assignments WHERE email = ?")
+    .bind(email).first<Record<string, string>>().catch(() => null);
+  if (cur && String(cur.ai_engineer ?? "").trim()) return; // sudah ada PIC AI — jangan ganggu
+  const now = new Date().toISOString();
+  // Default single-person: user aktif pertama per divisi.
+  async function firstActive(division: string): Promise<string> {
+    const r = await env.DB.prepare("SELECT username FROM users WHERE division = ? AND active = 1 ORDER BY id ASC LIMIT 1")
+      .bind(division).first<{ username: string }>().catch(() => null);
+    return r?.username ?? "";
+  }
+  // AI engineer dengan load terkecil.
+  async function leastLoadedAi(): Promise<string> {
+    const cands = await env.DB.prepare("SELECT username FROM users WHERE division = 'ai_engineer' AND active = 1 ORDER BY id ASC LIMIT 50")
+      .all<{ username: string }>().catch(() => ({ results: [] as never[] }));
+    const list = (cands.results ?? []).map((r) => r.username).filter(Boolean);
+    if (list.length === 0) return "";
+    if (list.length === 1) return list[0];
+    const loads = await env.DB.prepare(
+      `SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments WHERE ai_engineer IN (${list.map(() => "?").join(",")}) GROUP BY ai_engineer`
+    ).bind(...list).all<{ pic: string; n: number }>().catch(() => ({ results: [] as never[] }));
+    const n: Record<string, number> = {};
+    for (const r of loads.results ?? []) n[r.pic] = Number(r.n ?? 0);
+    let best = list[0];
+    for (const u of list) if ((n[u] ?? 0) < (n[best] ?? 0)) best = u;
+    return best;
+  }
+  const patch: Record<string, string> = {};
+  if (!cur) {
+    for (const d of ["sales", "marketing", "support", "it", "retensi"]) patch[d] = await firstActive(d);
+    patch.ai_engineer = await leastLoadedAi();
+    const cols = Object.keys(patch);
+    if (cols.length === 0) return;
+    await env.DB.prepare(
+      `INSERT INTO client_assignments (email, ${cols.join(", ")}, updated_at, updated_by)
+       VALUES (?, ${cols.map(() => "?").join(", ")}, ?, ?)
+       ON CONFLICT(email) DO NOTHING`
+    ).bind(email, ...cols.map((c) => patch[c]), now, by).run();
+  } else {
+    if (!String(cur.ai_engineer ?? "").trim()) {
+      const ai = await leastLoadedAi();
+      if (ai) {
+        await env.DB.prepare("UPDATE client_assignments SET ai_engineer = ?, updated_at = ?, updated_by = ? WHERE email = ?")
+          .bind(ai, now, by, email).run();
+      }
+    }
+  }
 }
 
 // DELETE /api/orders?order_id=xxx — khusus admin (hapus order permanen).

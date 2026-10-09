@@ -144,6 +144,31 @@ export function accountReadyMail(c: {
   };
 }
 
+/* Email akses agent: dikirim otomatis saat order pindah setup_server -> onboard.
+   Tanpa credential — customer signup sendiri saat pertama kali membuka URL. */
+export function agentAccessMail(c: {
+  client_name: string;
+  access_url: string;
+}): { subject: string; html: string; text: string } {
+  const subject = `Malika Agent kamu sudah siap`;
+  const inner = `
+    <p>Halo ${c.client_name},</p>
+    <p>Kabar baik — server Malika Agent kamu sudah siap dan bisa diakses di:</p>
+    <p style="text-align:center;margin:20px 0">
+      <a href="${c.access_url}" style="display:inline-block;background:#0d9488;color:#fff!important;text-decoration:none;font-weight:bold;padding:12px 28px;border-radius:999px">Buka Malika Agent →</a>
+    </p>
+    <p style="font-size:12px;color:#888">Atau salin URL ini ke browser:<br><code>${c.access_url}</code></p>
+    <p>Saat pertama kali dibuka, silakan <strong>signup / buat akun kamu sendiri</strong> langsung di halaman tersebut.</p>
+    <p>📎 Panduan onboarding terlampir di email ini (${ONBOARDING_PDF_NAME}).<br>
+    📖 <a href="${DOCS_URL}">Klik untuk lihat Dokumentasi Malika Agent</a></p>
+    <p>Kalau ada kendala, balas email ini atau hubungi WhatsApp kami.</p>`;
+  return {
+    subject,
+    html: WRAP(inner),
+    text: `Halo ${c.client_name},\n\nServer Malika Agent kamu sudah siap dan bisa diakses di:\n${c.access_url}\n\nSaat pertama kali dibuka, silakan signup / buat akun kamu sendiri langsung di halaman tersebut.\n\nPanduan onboarding terlampir di email ini.\nDokumentasi lengkap: ${DOCS_URL}\n\nMalika Agent`,
+  };
+}
+
 export function magicLinkMail(o: {
   nama: string;
   link: string;
