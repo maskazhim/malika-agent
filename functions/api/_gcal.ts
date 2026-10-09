@@ -124,8 +124,22 @@ export async function createMeetEvent(
     }
   );
   if (res.status === 404) throw new Error("kalender tidak ditemukan / belum di-share ke service account");
-  if (res.status === 403) throw new Error("ditolak Google (cek enable Calendar API + share kalender)");
-  if (!res.ok) throw new Error(`Google Calendar error ${res.status}`);
+  if (!res.ok) {
+    // Sertakan alasan dari Google (mis. "The service account does not have access...").
+    let reason = "";
+    try {
+      const body = (await res.json()) as { error?: { message?: string; status?: string } };
+      reason = String(body?.error?.message ?? "").slice(0, 200);
+    } catch {
+      /* abaikan */
+    }
+    if (res.status === 403) {
+      throw new Error(
+        `ditolak Google (cek enable Calendar API + share kalender sebagai Make changes to events)${reason ? `: ${reason}` : ""}`
+      );
+    }
+    throw new Error(`Google Calendar error ${res.status}${reason ? `: ${reason}` : ""}`);
+  }
   const data = (await res.json()) as {
     id?: string;
     hangoutLink?: string;
