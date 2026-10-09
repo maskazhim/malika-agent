@@ -1799,10 +1799,10 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as { ok?: boolean; error?: string; defaults?: boolean };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
       setNewEmail("");
-      setMsg(`Baris ${email} dibuat — pilih PIC lalu simpan.`);
+      setMsg(data.defaults ? `Baris ${email} dibuat dengan PIC default — ubah dropdown bila perlu lalu Simpan.` : `Baris ${email} dibuat — pilih PIC lalu simpan.`);
       void load();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Gagal menambah.");
