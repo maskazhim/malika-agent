@@ -388,7 +388,11 @@ interface Booking {
   duration_min: number;
   description: string;
   status: string;
+  gmeet_url: string;
+  hoptodesk_id: string;
 }
+
+const HOPTODESK_URL = "https://hoptodesk.com";
 
 function SupportPanel({
   pics,
@@ -404,6 +408,9 @@ function SupportPanel({
   const [slot, setSlot] = useState("");
   const [desc, setDesc] = useState("");
   const [orderId, setOrderId] = useState("");
+  const [wantRemote, setWantRemote] = useState(false);
+  const [hopId, setHopId] = useState("");
+  const [hopPass, setHopPass] = useState("");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -471,12 +478,17 @@ function SupportPanel({
           scheduled_at: slot,
           order_id: orderId || undefined,
           description: desc,
+          hoptodesk_id: wantRemote ? hopId : undefined,
+          hoptodesk_pass: wantRemote ? hopPass : undefined,
         }),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
       setSlot("");
       setDesc("");
+      setHopId("");
+      setHopPass("");
+      setWantRemote(false);
       setMsg("Booking terkirim — PIC akan konfirmasi jadwalmu.");
       void loadBookings();
       void loadSlots(pic.username);
@@ -607,6 +619,49 @@ function SupportPanel({
                 className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 text-sm outline-none focus:border-teal-400"
               />
             </label>
+            <div className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+              <label className="flex items-center gap-2 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={wantRemote}
+                  onChange={(e) => setWantRemote(e.target.checked)}
+                  className="h-4 w-4 accent-teal-600"
+                />
+                Perlu remote desktop oleh AI engineer (HopToDesk)
+              </label>
+              {wantRemote && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-[11px] leading-relaxed text-stone-500">
+                    1. Download HopToDesk di{" "}
+                    <a href={HOPTODESK_URL} target="_blank" rel="noopener noreferrer" className="font-semibold text-teal-700 underline">
+                      hoptodesk.com
+                    </a>{" "}
+                    lalu install & buka. 2. Isi ID + password yang tampil di aplikasi ke kolom bawah.
+                    ID/password hanya terlihat oleh PIC kamu dan admin.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-medium text-stone-500">ID HopToDesk</span>
+                      <input
+                        value={hopId}
+                        onChange={(e) => setHopId(e.target.value)}
+                        placeholder="cth. 123 456 789"
+                        className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 font-mono text-sm outline-none focus:border-teal-400"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] font-medium text-stone-500">Password HopToDesk</span>
+                      <input
+                        value={hopPass}
+                        onChange={(e) => setHopPass(e.target.value)}
+                        placeholder="password sekali pakai"
+                        className="w-full rounded-xl border border-stone-200 bg-white/80 px-3 py-2 font-mono text-sm outline-none focus:border-teal-400"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               type="submit"
               disabled={saving || !slot || desc.trim().length < 10}
@@ -637,6 +692,21 @@ function SupportPanel({
                   {b.pic_type === "ai_engineer" ? "AI Engineer" : "Account Executive"} · @{b.staff_username}
                 </p>
                 <p className="mt-1 text-xs text-stone-600">{b.description}</p>
+                {b.gmeet_url ? (
+                  <a
+                    href={b.gmeet_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block rounded-full bg-teal-600 px-4 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-700"
+                  >
+                    🎥 Join Google Meet
+                  </a>
+                ) : b.status === "pending" ? (
+                  <p className="mt-1 text-[11px] text-stone-400">Link Meet muncul di sini setelah PIC konfirmasi.</p>
+                ) : null}
+                {b.hoptodesk_id ? (
+                  <p className="mt-1 font-mono text-[11px] text-stone-500">HopToDesk ID: {b.hoptodesk_id} (tersimpan untuk PIC)</p>
+                ) : null}
                 {(b.status === "pending" || b.status === "confirmed") && (
                   <button
                     onClick={() => void cancel(b.id)}

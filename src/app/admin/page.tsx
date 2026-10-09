@@ -1321,6 +1321,9 @@ interface SupportBooking {
   duration_min: number;
   description: string;
   status: string;
+  gmeet_url: string;
+  hoptodesk_id: string;
+  hoptodesk_pass: string;
 }
 
 /* Tab Support internal: pengaturan durasi & jam kerja (admin), availability
@@ -1486,15 +1489,21 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
 
   async function act(id: number, status: string) {
     setActing(id);
+    setMsg(null);
     try {
       const res = await fetch("/api/support-bookings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status }),
       });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "gagal");
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean; error?: string; gmeet_url?: string; gcal_warning?: string | null;
+      } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      if (data.gcal_warning) {
+        setMsg(`Booking dikonfirmasi, tapi event kalender gagal (${data.gcal_warning}). Klik Konfirmasi lagi untuk coba ulang.`);
+      } else if (data.gmeet_url) {
+        setMsg("Booking dikonfirmasi + link Meet dibuat.");
       }
       void loadBookings(scope, statusFilter);
     } catch (err) {
@@ -1687,6 +1696,30 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
                   {b.order_id ? ` · order ${b.order_id.slice(0, 8)}` : ""}
                 </p>
                 <p className="mt-1 rounded-xl bg-white/70 px-3 py-2 text-xs text-stone-600 ring-1 ring-white">{b.description}</p>
+                {b.gmeet_url ? (
+                  <a
+                    href={b.gmeet_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block rounded-full bg-teal-600 px-4 py-1.5 text-[11px] font-semibold text-white hover:bg-teal-700"
+                  >
+                    🎥 Join Google Meet
+                  </a>
+                ) : b.status === "confirmed" ? (
+                  <button
+                    onClick={() => void act(b.id, "confirmed")}
+                    disabled={acting === b.id}
+                    title="Coba buatkan event kalender + Meet lagi"
+                    className="mt-2 rounded-full bg-white px-4 py-1.5 text-[11px] font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-100 disabled:opacity-60"
+                  >
+                    🔄 Buatkan Meet
+                  </button>
+                ) : null}
+                {b.hoptodesk_id ? (
+                  <p className="mt-2 rounded-xl bg-violet-50 px-3 py-2 font-mono text-[11px] text-violet-900 ring-1 ring-violet-100">
+                    🖥 HopToDesk — ID: {b.hoptodesk_id}{b.hoptodesk_pass ? ` · Pass: ${b.hoptodesk_pass}` : ""}
+                  </p>
+                ) : null}
                 {(b.status === "pending" || b.status === "confirmed") && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {b.status === "pending" && (

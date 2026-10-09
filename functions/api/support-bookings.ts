@@ -11,12 +11,13 @@
 
 import { canManageUsers, cors, getSession, type EnvBase } from "./_auth";
 import { getCustomerSession } from "./customer-auth";
+import { createMeetEvent, deleteEvent, type GcalEnv } from "./_gcal";
 import {
   busyRanges, daySlots, effectiveWindows, ensureSupportTables, getSettings,
   hhmmToMin, isPicType, picColumn, validHHMM, wibNow,
 } from "./_support";
 
-interface Env extends EnvBase {}
+interface Env extends EnvBase, GcalEnv {}
 
 const ACTIVE = ["pending", "confirmed"] as const;
 const ALL_STATUS = ["pending", "confirmed", "done", "cancelled"] as const;
@@ -25,7 +26,16 @@ export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: cors });
 }
 
-/* Username PIC customer untuk tipe tsb ("" bila belum ada assignment). */
+/* HopToDesk hanya untuk: customer pemilik, PIC yang ditugaskan, admin.
+   Panggil untuk tiap baris sebelum dikirim ke client. */
+function maskHop<T extends Record<string, unknown>>(
+  r: T, viewer: { customer?: string; staff?: string; isAdmin?: boolean }
+): T {
+  const owner = String(r.customer_email ?? "").toLowerCase() === (viewer.customer ?? "").toLowerCase();
+  const assigned = String(r.staff_username ?? "") !== "" && r.staff_username === viewer.staff;
+  if (owner || assigned || viewer.isAdmin) return r;
+  return { ...r, hoptodesk_id: "", hoptodesk_pass: "" };
+}
 async function customerPic(env: Env, email: string, pic: string): Promise<string> {
   const row = await env.DB.prepare(
     `SELECT ${picColumn(pic)} AS pic FROM client_assignments WHERE email = ?`
@@ -60,7 +70,11 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     if (conds.length > 0) q += " WHERE " + conds.join(" AND ");
     q += " ORDER BY scheduled_at ASC LIMIT 200";
     const { results } = await env.DB.prepare(q).bind(...vals).all().catch(() => ({ results: [] as never[] }));
-    return Response.json({ ok: true, bookings: results ?? [], scope }, { headers: cors });
+    const isAdmin = canManageUsers(s) || s.division === "admin";
+    const out = ((results ?? []) as Record<string, unknown>[]).map((r) =>
+      maskHop(r, { staff: s.username, isAdmin })
+    );
+    return Response.json({ ok: true, bookings: out, scope }, { headers: cors });
   }
 
   const c = await getCustomerSession(request, env);
@@ -73,7 +87,10 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   }
   q += " ORDER BY scheduled_at ASC LIMIT 100";
   const { results } = await env.DB.prepare(q).bind(...vals).all().catch(() => ({ results: [] as never[] }));
-  return Response.json({ ok: true, bookings: results ?? [] }, { headers: cors });
+  const out = ((results ?? []) as Record<string, unknown>[]).map((r) =>
+    maskHop(r, { customer: c.email })
+  );
+  return Response.json({ ok: true, bookings: out }, { headers: cors });
 }
 
 // POST — customer buat booking.
@@ -92,6 +109,9 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   const at = String(b.scheduled_at ?? "").slice(0, 16);
   const order_id = String(b.order_id ?? "").slice(0, 64);
   const desc = String(b.description ?? "").trim().slice(0, 2000);
+  // HopToDesk opsional (ID + password untuk remote desktop oleh AI engineer).
+  const hopId = String(b.hoptodesk_id ?? "").trim().slice(0, 32);
+  const hopPass = String(b.hoptodesk_pass ?? "").trim().slice(0, 64);
   if (!isPicType(pic)) return new Response(JSON.stringify({ error: "pic_type tidak valid" }), { status: 400, headers: cors });
   if (!staff) return new Response(JSON.stringify({ error: "staff wajib dipilih" }), { status: 400, headers: cors });
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(at)) {
@@ -142,9 +162,9 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
 
   const ts = new Date().toISOString();
   const r = (await env.DB.prepare(
-    `INSERT INTO support_bookings (customer_email, order_id, staff_username, pic_type, scheduled_at, duration_min, description, status, created_at, updated_at, handled_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, '')`
-  ).bind(c.email.toLowerCase(), order_id, staff, pic, at, st.slot_minutes, desc, ts, ts).run()) as {
+    `INSERT INTO support_bookings (customer_email, order_id, staff_username, pic_type, scheduled_at, duration_min, description, hoptodesk_id, hoptodesk_pass, status, created_at, updated_at, handled_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, '')`
+  ).bind(c.email.toLowerCase(), order_id, staff, pic, at, st.slot_minutes, desc, hopId, hopPass, ts, ts).run()) as {
     meta?: { last_row_id?: number };
   };
   const id = r?.meta?.last_row_id ?? 0;
@@ -168,7 +188,11 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   }
   await ensureSupportTables(env.DB);
   const row = await env.DB.prepare("SELECT * FROM support_bookings WHERE id = ?").bind(id)
-    .first<{ staff_username: string; customer_email: string; status: string }>().catch(() => null);
+    .first<{
+      staff_username: string; customer_email: string; status: string;
+      scheduled_at: string; duration_min: number; description: string;
+      pic_type: string; order_id: string; gcal_event_id: string;
+    }>().catch(() => null);
   if (!row) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
 
   const s = await getSession(request, env);
@@ -196,5 +220,61 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   }
   await env.DB.prepare("UPDATE support_bookings SET status = ?, updated_at = ?, handled_by = ? WHERE id = ?")
     .bind(next, new Date().toISOString(), by, id).run();
-  return Response.json({ ok: true, id, status: next }, { headers: cors });
+
+  // Confirm (staff/admin) -> buatkan event kalender + link Meet (idempoten).
+  // Booking tetap confirmed walau GCal gagal; caller dapat gcal_warning + retry
+  // cukup PATCH confirmed lagi.
+  let gmeet_url = "";
+  let gcal_warning: string | null = null;
+  if (s && next === "confirmed") {
+    try {
+      const cur = await env.DB.prepare("SELECT gcal_event_id, gmeet_url FROM support_bookings WHERE id = ?")
+        .bind(id).first<{ gcal_event_id: string; gmeet_url: string }>().catch(() => null);
+      if (cur?.gcal_event_id) {
+        gmeet_url = cur.gmeet_url ?? "";
+      } else {
+        let product = "Malika Agent";
+        if (row.order_id) {
+          const o = await env.DB.prepare("SELECT product, nama FROM orders WHERE order_id = ?")
+            .bind(row.order_id).first<{ product: string; nama: string }>().catch(() => null);
+          if (o?.product) product = o.product;
+        }
+        const who = await env.DB.prepare("SELECT name FROM customers WHERE lower(email) = ?")
+          .bind(String(row.customer_email).toLowerCase()).first<{ name: string }>().catch(() => null);
+        const picLabel = row.pic_type === "account_executive" ? "Account Executive" : "AI Engineer";
+        const ev = await createMeetEvent(env, {
+          summary: `Support ${product} — ${who?.name || row.customer_email}`,
+          description:
+            `Booking support Malika Agent\nPIC: ${picLabel} (@${row.staff_username})\n` +
+            `Customer: ${row.customer_email}\nOrder: ${row.order_id || "-"}\n\nKebutuhan:\n${row.description}`,
+          customerEmail: row.customer_email,
+          startWib: String(row.scheduled_at).slice(0, 16),
+          durationMin: Number(row.duration_min) || 30,
+          requestId: `bk-${id}`,
+        });
+        await env.DB.prepare("UPDATE support_bookings SET gcal_event_id = ?, gmeet_url = ? WHERE id = ?")
+          .bind(ev.eventId, ev.meetUrl, id).run();
+        gmeet_url = ev.meetUrl;
+      }
+    } catch (e) {
+      gcal_warning = e instanceof Error ? e.message : "gagal membuat event kalender";
+      console.log(`[support-bookings] gcal gagal untuk #${id}: ${gcal_warning}`);
+    }
+  }
+
+  // Cancel (siapa pun) -> hapus event kalender best-effort.
+  if (next === "cancelled") {
+    try {
+      const cur = await env.DB.prepare("SELECT gcal_event_id FROM support_bookings WHERE id = ?")
+        .bind(id).first<{ gcal_event_id: string }>().catch(() => null);
+      if (cur?.gcal_event_id) {
+        await deleteEvent(env, cur.gcal_event_id);
+        await env.DB.prepare("UPDATE support_bookings SET gcal_event_id = '', gmeet_url = '' WHERE id = ?")
+          .bind(id).run();
+      }
+    } catch (e) {
+      console.log(`[support-bookings] hapus event #${id} dilewati: ${String(e).slice(0, 200)}`);
+    }
+  }
+  return Response.json({ ok: true, id, status: next, gmeet_url, gcal_warning }, { headers: cors });
 }
