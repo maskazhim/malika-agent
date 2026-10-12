@@ -2520,8 +2520,8 @@ function ServerManager() {
     void loadVps();
   }, [loadVps]);
 
-  // Refresh versi aplikasi (GET /api/app-version). Tidak auto saat buka tab:
-  // cukup dari cache DB harian + tombol ini. Hasil live persist ke DB.
+  // Cek versi aplikasi live (GET /api/app-version) + persist best-effort ke DB.
+  // DB belum ada kolomnya = persist dilewati diam-diam, tabel tetap tampil live.
   const loadVers = useCallback(async () => {
     setVersLoading(true);
     setVersMsg(null);
@@ -2545,6 +2545,12 @@ function ServerManager() {
       setVersLoading(false);
     }
   }, [load]);
+
+  useEffect(() => {
+    // Buka tab = cek versi live tiap client (background, paralel).
+    // Sel versi tampil begitu respons datang; tombol Versi untuk refresh manual.
+    void loadVers();
+  }, [loadVers]);
 
   async function openEdit(order_id: string) {
     setEditMsg(null);
