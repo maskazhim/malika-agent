@@ -303,6 +303,11 @@ export default {
       console.log(`[payment-watcher] cron sync VPS error: ${String(e).slice(0, 200)}`);
     }
     try {
+      await syncAppVersions(env);
+    } catch (e) {
+      console.log(`[payment-watcher] cron sync app version error: ${String(e).slice(0, 200)}`);
+    }
+    try {
       const { results } = await env.DB.prepare(
         `SELECT o.order_id, o.product, o.nama, o.email, o.amount, o.retensi_at,
                 o.renewal_count, o.last_reminder_at, d.vps_tempo_at
@@ -390,6 +395,50 @@ async function syncVpsDueDates(env: Env): Promise<void> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* Sinkron harian versi aplikasi client -> deploy_configs (sekali sehari).
+   GET https://<web_domain>/api/version -> {tag, revision} per order.
+   Mirror dari functions/api/_appversion.ts (worker tidak bisa impor file
+   Pages). Best-effort: satu domain gagal = lewati. */
+async function syncAppVersions(env: Env): Promise<void> {
+  const { results } = await env.DB.prepare(
+    "SELECT order_id, web_domain FROM deploy_configs WHERE web_domain != '' LIMIT 500"
+  ).all<{ order_id: string; web_domain: string }>();
+  const targets = (results ?? []).filter((r) => r.order_id && r.web_domain);
+  if (targets.length === 0) return;
+  const now = new Date().toISOString();
+  let updated = 0;
+  await Promise.all(
+    targets.map(async (t) => {
+      const host = t.web_domain
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//i, "")
+        .split("/")[0];
+      if (!host || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return;
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10000);
+      try {
+        const res = await fetch(`https://${host}/api/version`, { signal: ctl.signal });
+        if (!res.ok) return;
+        const j = (await res.json()) as { tag?: unknown; revision?: unknown };
+        const tag = String(j.tag ?? "").slice(0, 32);
+        if (!tag) return;
+        const r = (await env.DB.prepare(
+          "UPDATE deploy_configs SET app_tag = ?, app_revision = ?, app_version_at = ?, updated_at = ? WHERE order_id = ?"
+        )
+          .bind(tag, String(j.revision ?? "").slice(0, 64), now, now, t.order_id)
+          .run()) as { meta?: { changes?: number } };
+        updated += r?.meta?.changes ?? 0;
+      } catch {
+        /* lewati */
+      } finally {
+        clearTimeout(timer);
+      }
+    })
+  );
+  console.log(`[payment-watcher] cron sync app version: ${updated}/${targets.length} baris (synced_at ${now})`);
 }
 
 function tempoToIso(t: string): string {

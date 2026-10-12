@@ -2416,6 +2416,9 @@ interface DeployConfig {
   vps_ip: string;
   vps_online: number;
   vps_synced_at: string;
+  app_tag: string;
+  app_revision: string;
+  app_version_at: string;
 }
 
 const DEPLOY_STYLE: Record<string, string> = {
@@ -2432,6 +2435,9 @@ function ServerManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [vps, setVps] = useState<Record<string, { status: string; periode: string; tempo: string; ip: string; online: boolean }>>({});
+  const [vers, setVers] = useState<Record<string, { tag: string; revision: string; at: string }>>({});
+  const [versLoading, setVersLoading] = useState(false);
+  const [versMsg, setVersMsg] = useState<string | null>(null);
   const [vpsAt, setVpsAt] = useState("");
   const [vpsLoading, setVpsLoading] = useState(false);
   const [vpsMsg, setVpsMsg] = useState<string | null>(null);
@@ -2513,6 +2519,32 @@ function ServerManager() {
     // (flow cron terpisah di payment-worker, hanya baca/tulis DB yang sama).
     void loadVps();
   }, [loadVps]);
+
+  // Refresh versi aplikasi (GET /api/app-version). Tidak auto saat buka tab:
+  // cukup dari cache DB harian + tombol ini. Hasil live persist ke DB.
+  const loadVers = useCallback(async () => {
+    setVersLoading(true);
+    setVersMsg(null);
+    try {
+      const res = await fetch("/api/app-version");
+      const data = (await res.json()) as {
+        ok?: boolean;
+        versions?: Record<string, { tag: string; revision: string; at: string }>;
+        synced?: number;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      setVers(data.versions ?? {});
+      await load();
+      if (typeof data.synced === "number" && data.synced > 0) {
+        setVersMsg(`Versi tersimpan ke database (${data.synced} server).`);
+      }
+    } catch (err) {
+      setVersMsg(err instanceof Error ? err.message : "Gagal cek versi.");
+    } finally {
+      setVersLoading(false);
+    }
+  }, [load]);
 
   async function openEdit(order_id: string) {
     setEditMsg(null);
@@ -2596,6 +2628,15 @@ function ServerManager() {
     return undefined;
   }
 
+  function versOf(c: DeployConfig) {
+    const live = vers[c.order_id];
+    if (live) return live;
+    if (c.app_tag) {
+      return { tag: c.app_tag, revision: c.app_revision || "", at: c.app_version_at || "" };
+    }
+    return undefined;
+  }
+
   const sorted = [...visible].sort((a, b) => {
     switch (sortKey) {
       case "server_asc":
@@ -2626,6 +2667,14 @@ function ServerManager() {
         >
           {vpsLoading ? "…" : "🔄 Reload"}
         </button>
+        <button
+          onClick={() => void loadVers()}
+          disabled={versLoading}
+          title="Cek ulang versi aplikasi tiap client (hasilnya disimpan ke database)"
+          className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
+        >
+          {versLoading ? "…" : "🔄 Versi"}
+        </button>
         <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-stone-500">
           Urut
           <select
@@ -2655,6 +2704,11 @@ function ServerManager() {
           {vpsMsg ?? `Jatuh tempo dari database (sinkron harian) — terakhir ${new Date(lastSync).toLocaleString("id-ID")}`}
         </p>
       )}
+      {versMsg && (
+        <p className="mt-4 rounded-xl bg-stone-100 px-3 py-2 text-xs font-medium text-stone-500 ring-1 ring-stone-200">
+          {versMsg}
+        </p>
+      )}
       <div className="glass-strong mt-4 overflow-x-auto rounded-3xl">
         {loading ? (
           <p className="p-8 text-center text-sm text-stone-500">Memuat config server…</p>
@@ -2671,6 +2725,7 @@ function ServerManager() {
                 <th className="px-4 py-3 font-semibold">Jatuh tempo</th>
                 <th className="px-4 py-3 font-semibold">IP</th>
                 <th className="px-4 py-3 font-semibold">Online</th>
+                <th className="px-4 py-3 font-semibold">Versi</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Aksi</th>
               </tr>
@@ -2680,6 +2735,8 @@ function ServerManager() {
                 const v = c.vps_id ? vps[String(c.vps_id)] : undefined;
                 const vpsPending = vpsLoading && !v;
                 const skel = <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-stone-300 border-t-teal-600" />;
+                const av = versOf(c);
+                const versPending = versLoading && !av;
                 return (
                 <tr key={c.order_id} className="border-b border-white/50 last:border-0 hover:bg-white/40">
                   <td className="px-4 py-3">
@@ -2704,6 +2761,20 @@ function ServerManager() {
                   <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.tempo ?? "-"}</td>
                   <td className="px-4 py-3 font-mono text-[11px]">{vpsPending ? skel : v?.ip || c.server_ip || "-"}</td>
                   <td className="px-4 py-3 text-sm">{vpsPending ? skel : v ? (v.online ? "🟢" : "🔴") : "-"}</td>
+                  <td className="px-4 py-3">
+                    {versPending ? skel : av ? (
+                      <>
+                        <p className="font-mono text-xs font-semibold">{av.tag}</p>
+                        {av.revision && (
+                          <p className="font-mono text-[10px] text-stone-400" title={av.revision}>
+                            {av.revision.slice(0, 7)}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-stone-400">-</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${DEPLOY_STYLE[c.deploy_status] ?? "bg-stone-200 text-stone-600"}`}
