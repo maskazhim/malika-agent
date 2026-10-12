@@ -2727,7 +2727,6 @@ function ServerManager() {
                 <th className="px-4 py-3 font-semibold">Order</th>
                 <th className="px-4 py-3 font-semibold">Klien / Server</th>
                 <th className="px-4 py-3 font-semibold">Layanan</th>
-                <th className="px-4 py-3 font-semibold">Periode</th>
                 <th className="px-4 py-3 font-semibold">Jatuh tempo</th>
                 <th className="px-4 py-3 font-semibold">IP</th>
                 <th className="px-4 py-3 font-semibold">Online</th>
@@ -2762,11 +2761,31 @@ function ServerManager() {
                     <p className="text-xs font-semibold">{c.client_name || "-"}</p>
                     <p className="text-[11px] text-stone-500">{c.server_name || "-"}</p>
                   </td>
-                  <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.status ?? "-"}</td>
-                  <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.periode ?? "-"}</td>
+                  <td className="px-4 py-3">
+                    {vpsPending ? skel : v ? (
+                      <>
+                        <p className="text-xs font-medium">{v.status || "-"}</p>
+                        <p className="text-[11px] text-stone-500">{v.periode || "-"}</p>
+                      </>
+                    ) : (
+                      <span className="text-xs text-stone-400">-</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-xs">{vpsPending ? skel : v?.tempo ?? "-"}</td>
                   <td className="px-4 py-3 font-mono text-[11px]">{vpsPending ? skel : v?.ip || c.server_ip || "-"}</td>
-                  <td className="px-4 py-3 text-sm">{vpsPending ? skel : v ? (v.online ? "🟢" : "🔴") : "-"}</td>
+                  <td className="px-4 py-3">
+                    {vpsPending ? skel : v ? (
+                      <span
+                        className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                          v.online ? "bg-green-100 text-green-800" : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {v.online ? "online" : "offline"}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-stone-400">-</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     {versPending ? skel : av ? (
                       <>
