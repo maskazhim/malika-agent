@@ -18,6 +18,10 @@ export interface GcalEnv {
   GCAL_REFRESH_TOKEN?: string;
   GCAL_CALENDAR_ID?: string;
   GCAL_INVITE_EMAIL?: string;
+  // Email akun yang dipakai consent OAuth (organizer). Tamu dengan email ini
+  // dilewati agar event tidak tampil ganda (kalender grup + undangan di
+  // kalender utama organizer). Kosong = perilaku lama (semua diundang).
+  GCAL_ORGANIZER_EMAIL?: string;
 }
 
 export const GCAL_INVITE_DEFAULT = "halo@malika.ai";
@@ -185,6 +189,15 @@ export async function createMeetEvent(
 ): Promise<{ eventId: string; meetUrl: string }> {
   const c = creds(env);
   const { token, via } = await resolveToken(env, c.sa);
+  // Susun tamu: dedupe + lewati organizer (dirinya sendiri) agar tidak echo
+  // ke kalender utama organizer. Customer tetap selalu diundang.
+  const org = String(env.GCAL_ORGANIZER_EMAIL ?? "").trim().toLowerCase();
+  const attendees = [e.customerEmail, c.invite]
+    .map((m) => String(m ?? "").trim())
+    .filter((m) => !!m)
+    .filter((m, i, a) => a.findIndex((x) => x.toLowerCase() === m.toLowerCase()) === i)
+    .filter((m) => !org || m.toLowerCase() !== org)
+    .map((email) => ({ email }));
   const [d, t] = e.startWib.split("T");
   const [hh, mm] = t.split(":").map(Number);
   const startMin = hh * 60 + mm + Math.max(10, Math.min(240, Math.round(e.durationMin) || 30));
@@ -199,7 +212,7 @@ export async function createMeetEvent(
         description: e.description.slice(0, 2000),
         start: { dateTime: `${e.startWib}:00`, timeZone: TZ },
         end: { dateTime: `${end}:00`, timeZone: TZ },
-        attendees: [{ email: e.customerEmail }, { email: c.invite }],
+        attendees,
         conferenceData: {
           createRequest: { requestId: e.requestId.slice(0, 64), conferenceSolutionKey: { type: "hangoutsMeet" } },
         },
