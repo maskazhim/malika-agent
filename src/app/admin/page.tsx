@@ -2428,6 +2428,25 @@ const DEPLOY_STYLE: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
 };
 
+// Ikon refresh inline (gaya react-icons/FiRefreshCw, tanpa tambah dependensi).
+function SpinIcon({ spin }: { spin?: boolean }) {
+  return (
+    <svg
+      className={`h-3.5 w-3.5 ${spin ? "animate-spin" : ""}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
 function ServerManager() {
   const [configs, setConfigs] = useState<DeployConfig[]>([]);
   const [search, setSearch] = useState("");
@@ -2501,11 +2520,6 @@ function ServerManager() {
       setVps(data.vps ?? {});
       setVpsAt(data.diambil_pada ?? "");
       await load();
-      setVpsMsg(
-        typeof data.synced === "number"
-          ? `Lookup tersimpan ke database (${data.synced} server). Sinkron otomatis harian via cron.`
-          : "Lookup selesai."
-      );
     } catch (err) {
       setVpsMsg(err instanceof Error ? err.message : "Gagal lookup VPS.");
     } finally {
@@ -2669,17 +2683,19 @@ function ServerManager() {
           onClick={() => void loadVps()}
           disabled={vpsLoading}
           title="Lookup ulang dari IndoVM (hasilnya disimpan ke database)"
-          className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
         >
-          {vpsLoading ? "…" : "🔄 Reload"}
+          <SpinIcon spin={vpsLoading} />
+          Reload
         </button>
         <button
           onClick={() => void loadVers()}
           disabled={versLoading}
           title="Cek ulang versi aplikasi tiap client (hasilnya disimpan ke database)"
-          className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-white hover:bg-white disabled:opacity-60"
         >
-          {versLoading ? "…" : "🔄 Versi"}
+          <SpinIcon spin={versLoading} />
+          Versi
         </button>
         <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-stone-500">
           Urut
