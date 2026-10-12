@@ -1,15 +1,21 @@
-/* Google Calendar via Service Account (tanpa library, fetch + JWT RS256).
+/* Google Calendar via OAuth refresh token (utama) atau Service Account (fallback).
    File underscore = tidak jadi route, hanya untuk diimpor.
-   Env: GCAL_SERVICE_ACCOUNT = JSON service account (cukup client_email +
-   private_key; field lain opsional), GCAL_CALENDAR_ID = ID kalender,
-   GCAL_INVITE_EMAIL = email Malika untuk attendee tim (opsional).
+   Env utama (disarankan, tanpa share kalender ke SA):
+     GCAL_OAUTH_CLIENT_ID, GCAL_OAUTH_CLIENT_SECRET, GCAL_REFRESH_TOKEN,
+     GCAL_CALENDAR_ID = ID kalender (bisa group calendar ...@group.calendar.google.com),
+     GCAL_INVITE_EMAIL = email Malika untuk attendee tim (opsional).
+   Env fallback lama:
+     GCAL_SERVICE_ACCOUNT = JSON service account (client_email + private_key).
 
-   Semua fungsi best-effort di sisi caller: throw {message} yang ramah
-   (API belum enabled / kalender belum di-share / secret salah format).
+   Prioritas token: OAuth refresh -> Service Account.
+   Semua fungsi best-effort di sisi caller: throw {message} yang ramah.
 */
 
 export interface GcalEnv {
   GCAL_SERVICE_ACCOUNT?: string;
+  GCAL_OAUTH_CLIENT_ID?: string;
+  GCAL_OAUTH_CLIENT_SECRET?: string;
+  GCAL_REFRESH_TOKEN?: string;
   GCAL_CALENDAR_ID?: string;
   GCAL_INVITE_EMAIL?: string;
 }
@@ -38,7 +44,7 @@ function pemToDer(pem: string): ArrayBuffer {
 }
 
 async function accessToken(clientEmail: string, privateKey: string): Promise<string> {
-  const cacheKey = `${clientEmail}`;
+  const cacheKey = `sa:${clientEmail}`;
   const now = Math.floor(Date.now() / 1000);
   if (cached && cached.key === cacheKey && cached.exp - 60 > now) return cached.token;
   const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
@@ -67,24 +73,101 @@ async function accessToken(clientEmail: string, privateKey: string): Promise<str
   return data.access_token;
 }
 
-function creds(env: GcalEnv): { email: string; key: string; calId: string; invite: string } {
-  let raw = String(env.GCAL_SERVICE_ACCOUNT ?? "").trim();
-  if (!raw) throw new Error("secret GCAL_SERVICE_ACCOUNT belum diset di Pages");
-  let j: Record<string, unknown>;
-  try {
-    j = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error("GCAL_SERVICE_ACCOUNT bukan JSON valid");
+/* OAuth refresh token -> access token (bertindak sebagai user yang consent,
+   mis. halo@malika.ai — tidak butuh share kalender ke service account). */
+async function accessTokenViaRefresh(
+  clientId: string, clientSecret: string, refreshToken: string
+): Promise<string> {
+  const cacheKey = `oauth:${clientId}`;
+  const now = Math.floor(Date.now() / 1000);
+  if (cached && cached.key === cacheKey && cached.exp - 60 > now) return cached.token;
+  const res = await fetch(TOKEN_URI, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:
+      `grant_type=refresh_token&client_id=${encodeURIComponent(clientId)}` +
+      `&client_secret=${encodeURIComponent(clientSecret)}` +
+      `&refresh_token=${encodeURIComponent(refreshToken)}`,
+  });
+  if (!res.ok) {
+    let reason = "";
+    try {
+      const body = (await res.json()) as { error?: string; error_description?: string };
+      reason = String(body?.error_description ?? body?.error ?? "").slice(0, 200);
+    } catch {
+      /* abaikan */
+    }
+    if (res.status === 400 && /invalid_grant/i.test(reason)) {
+      throw new Error(
+        "refresh token tidak valid / dicabut — jalankan ulang scripts/get-refresh-token.mjs sebagai halo@malika.ai"
+      );
+    }
+    if (res.status === 401) {
+      throw new Error(
+        `OAuth client ditolak Google (cek CLIENT_ID/CLIENT_SECRET)${reason ? `: ${reason}` : ""}`
+      );
+    }
+    throw new Error(`gagal refresh OAuth token (${res.status})${reason ? `: ${reason}` : ""}`);
   }
-  const email = String(j.client_email ?? "").trim();
-  const key = String(j.private_key ?? "");
-  if (!email || !key.includes("BEGIN PRIVATE KEY")) {
-    throw new Error("GCAL_SERVICE_ACCOUNT butuh client_email + private_key yang valid");
+  const data = (await res.json()) as { access_token?: string; expires_in?: number };
+  if (!data.access_token) throw new Error("Google tidak mengembalikan access token");
+  cached = { token: data.access_token, exp: now + Number(data.expires_in ?? 3600), key: cacheKey };
+  return data.access_token;
+}
+
+function hasOAuth(env: GcalEnv): boolean {
+  return !!(
+    String(env.GCAL_OAUTH_CLIENT_ID ?? "").trim() &&
+    String(env.GCAL_OAUTH_CLIENT_SECRET ?? "").trim() &&
+    String(env.GCAL_REFRESH_TOKEN ?? "").trim()
+  );
+}
+
+/* Pilih token: OAuth dulu, fallback ke Service Account lama. */
+async function resolveToken(
+  env: GcalEnv, sa: { email: string; key: string } | null
+): Promise<{ token: string; via: "oauth" | "sa" }> {
+  if (hasOAuth(env)) {
+    const token = await accessTokenViaRefresh(
+      String(env.GCAL_OAUTH_CLIENT_ID ?? "").trim(),
+      String(env.GCAL_OAUTH_CLIENT_SECRET ?? "").trim(),
+      String(env.GCAL_REFRESH_TOKEN ?? "").trim()
+    );
+    return { token, via: "oauth" };
   }
+  if (sa) return { token: await accessToken(sa.email, sa.key), via: "sa" };
+  throw new Error(
+    "secret GCAL_REFRESH_TOKEN (+CLIENT_ID/CLIENT_SECRET) atau GCAL_SERVICE_ACCOUNT belum diset di Pages"
+  );
+}
+
+function creds(env: GcalEnv): { sa: { email: string; key: string } | null; calId: string; invite: string } {
   const calId = String(env.GCAL_CALENDAR_ID ?? "").trim();
   if (!calId) throw new Error("var GCAL_CALENDAR_ID belum diset di Pages");
   const invite = String(env.GCAL_INVITE_EMAIL ?? "").trim() || GCAL_INVITE_DEFAULT;
-  return { email, key, calId, invite };
+  // Service Account opsional sekarang (hanya fallback bila OAuth tidak diset).
+  let sa: { email: string; key: string } | null = null;
+  const raw = String(env.GCAL_SERVICE_ACCOUNT ?? "").trim();
+  if (raw) {
+    let j: Record<string, unknown>;
+    try {
+      j = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      throw new Error("GCAL_SERVICE_ACCOUNT bukan JSON valid");
+    }
+    const email = String(j.client_email ?? "").trim();
+    const key = String(j.private_key ?? "");
+    if (!email || !key.includes("BEGIN PRIVATE KEY")) {
+      throw new Error("GCAL_SERVICE_ACCOUNT butuh client_email + private_key yang valid");
+    }
+    sa = { email, key };
+  }
+  if (!hasOAuth(env) && !sa) {
+    throw new Error(
+      "secret GCAL_REFRESH_TOKEN (+CLIENT_ID/CLIENT_SECRET) atau GCAL_SERVICE_ACCOUNT belum diset di Pages"
+    );
+  }
+  return { sa, calId, invite };
 }
 
 export interface MeetEvent {
@@ -101,7 +184,7 @@ export async function createMeetEvent(
   env: GcalEnv, e: MeetEvent
 ): Promise<{ eventId: string; meetUrl: string }> {
   const c = creds(env);
-  const token = await accessToken(c.email, c.key);
+  const { token, via } = await resolveToken(env, c.sa);
   const [d, t] = e.startWib.split("T");
   const [hh, mm] = t.split(":").map(Number);
   const startMin = hh * 60 + mm + Math.max(10, Math.min(240, Math.round(e.durationMin) || 30));
@@ -123,7 +206,13 @@ export async function createMeetEvent(
       }),
     }
   );
-  if (res.status === 404) throw new Error("kalender tidak ditemukan / belum di-share ke service account");
+  if (res.status === 404) {
+    throw new Error(
+      via === "oauth"
+        ? "kalender tidak ditemukan / user OAuth belum punya akses Make changes ke kalender ini"
+        : "kalender tidak ditemukan / belum di-share ke service account"
+    );
+  }
   if (!res.ok) {
     // Sertakan alasan dari Google (mis. "The service account does not have access...").
     let reason = "";
@@ -135,7 +224,9 @@ export async function createMeetEvent(
     }
     if (res.status === 403) {
       throw new Error(
-        `ditolak Google (cek enable Calendar API + share kalender sebagai Make changes to events)${reason ? `: ${reason}` : ""}`
+        via === "oauth"
+          ? `ditolak Google (cek enable Calendar API + user OAuth punya akses Make changes ke kalender)${reason ? `: ${reason}` : ""}`
+          : `ditolak Google (cek enable Calendar API + share kalender sebagai Make changes to events)${reason ? `: ${reason}` : ""}`
       );
     }
     throw new Error(`Google Calendar error ${res.status}${reason ? `: ${reason}` : ""}`);
@@ -157,7 +248,7 @@ export async function createMeetEvent(
 export async function deleteEvent(env: GcalEnv, eventId: string): Promise<void> {
   if (!eventId) return;
   const c = creds(env);
-  const token = await accessToken(c.email, c.key);
+  const { token } = await resolveToken(env, c.sa);
   const res = await fetch(
     `${CAL_BASE}/calendars/${encodeURIComponent(c.calId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`,
     { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gcal:auth": "node scripts/get-refresh-token.mjs"
   },
   "dependencies": {
     "next": "16.3.5",
