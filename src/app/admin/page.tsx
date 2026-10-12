@@ -2508,8 +2508,11 @@ function ServerManager() {
   }, [load]);
 
   useEffect(() => {
-    // Tabel langsung dari cache DB (tanpa hit IndoVM tiap buka).
-  }, []);
+    // Buka tab = hit live flow-new (background). Tabel langsung tampil dari
+    // cache DB, sel terupdate begitu lookup selesai. Cron tidak terganggu
+    // (flow cron terpisah di payment-worker, hanya baca/tulis DB yang sama).
+    void loadVps();
+  }, [loadVps]);
 
   async function openEdit(order_id: string) {
     setEditMsg(null);
