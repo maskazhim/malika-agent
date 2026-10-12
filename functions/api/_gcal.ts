@@ -244,6 +244,66 @@ export async function createMeetEvent(
   return { eventId: data.id, meetUrl: meet };
 }
 
+/* Patch judul/deskripsi event yang sudah ada (best-effort).
+   Dipakai refresh judul saat confirm ulang + rename event yatim. */
+export async function patchEvent(
+  env: GcalEnv, eventId: string, fields: { summary?: string; description?: string }
+): Promise<void> {
+  if (!eventId) throw new Error("eventId kosong");
+  const c = creds(env);
+  const { token } = await resolveToken(env, c.sa);
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(c.calId)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(fields.summary !== undefined ? { summary: fields.summary.slice(0, 200) } : {}),
+        ...(fields.description !== undefined ? { description: fields.description.slice(0, 2000) } : {}),
+      }),
+    }
+  );
+  if (res.status === 404) throw new Error("event tidak ditemukan di kalender ini");
+  if (!res.ok) throw new Error(`gagal update event (${res.status})`);
+}
+
+/* Cari event berdasarkan potongan link Meet (mis. "idn-vnse-qgo") dalam
+   rentang waktu. Return {id, summary} pertama yang cocok, atau null. */
+export async function findEventByMeet(
+  env: GcalEnv, meetCode: string, timeMinWib: string, timeMaxWib: string
+): Promise<{ id: string; summary: string } | null> {
+  const code = meetCode.trim().toLowerCase().replace(/[^a-z-]/g, "");
+  if (!code) throw new Error("meet code kosong");
+  const c = creds(env);
+  const { token } = await resolveToken(env, c.sa);
+  const q = new URLSearchParams({
+    timeMin: `${timeMinWib}:00+07:00`,
+    timeMax: `${timeMaxWib}:00+07:00`,
+    singleEvents: "true",
+    maxResults: "50",
+    orderBy: "startTime",
+  });
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(c.calId)}/events?${q}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) throw new Error(`gagal membaca kalender (${res.status})`);
+  const data = (await res.json()) as {
+    items?: {
+      id?: string; summary?: string; hangoutLink?: string;
+      conferenceData?: { entryPoints?: { uri?: string }[] };
+    }[];
+  };
+  for (const it of data.items ?? []) {
+    const links = [
+      it.hangoutLink ?? "",
+      ...(it.conferenceData?.entryPoints ?? []).map((p) => p.uri ?? ""),
+    ].join(" ").toLowerCase();
+    if (it.id && links.includes(code)) return { id: it.id, summary: it.summary ?? "" };
+  }
+  return null;
+}
+
 /* Hapus event (best-effort, 404/410 = sudah hilang, anggap sukses). */
 export async function deleteEvent(env: GcalEnv, eventId: string): Promise<void> {
   if (!eventId) return;

@@ -11,7 +11,7 @@
 
 import { canManageUsers, cors, getSession, type EnvBase } from "./_auth";
 import { getCustomerSession } from "./customer-auth";
-import { createMeetEvent, deleteEvent, type GcalEnv } from "./_gcal";
+import { createMeetEvent, deleteEvent, patchEvent, type GcalEnv } from "./_gcal";
 import {
   daySlots, ensureSupportTables, getSettings,
   isPicType, picColumn, validHHMM, wibNow,
@@ -218,30 +218,40 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
 
   // Confirm (staff/admin) -> buatkan event kalender + link Meet (idempoten).
   // Booking tetap confirmed walau GCal gagal; caller dapat gcal_warning + retry
-  // cukup PATCH confirmed lagi.
+  // cukup PATCH confirmed lagi. Confirm ulang juga me-refresh judul/deskripsi
+  // event dari data DB terkini (mis. nama customer baru dibetulkan).
   let gmeet_url = "";
   let gcal_warning: string | null = null;
   if (s && next === "confirmed") {
     try {
       const cur = await env.DB.prepare("SELECT gcal_event_id, gmeet_url FROM support_bookings WHERE id = ?")
         .bind(id).first<{ gcal_event_id: string; gmeet_url: string }>().catch(() => null);
+      let product = "Malika Agent";
+      if (row.order_id) {
+        const o = await env.DB.prepare("SELECT product, nama FROM orders WHERE order_id = ?")
+          .bind(row.order_id).first<{ product: string; nama: string }>().catch(() => null);
+        if (o?.product) product = o.product;
+      }
+      const who = await env.DB.prepare("SELECT name FROM customers WHERE lower(email) = ?")
+        .bind(String(row.customer_email).toLowerCase()).first<{ name: string }>().catch(() => null);
+      const picLabel = row.pic_type === "account_executive" ? "Account Executive" : "AI Engineer";
+      const content = {
+        summary: `Support ${product} — ${who?.name || row.customer_email}`,
+        description:
+          `Booking support Malika Agent\nPIC: ${picLabel} (@${row.staff_username})\n` +
+          `Customer: ${row.customer_email}\nOrder: ${row.order_id || "-"}\n\nKebutuhan:\n${row.description}`,
+      };
       if (cur?.gcal_event_id) {
         gmeet_url = cur.gmeet_url ?? "";
-      } else {
-        let product = "Malika Agent";
-        if (row.order_id) {
-          const o = await env.DB.prepare("SELECT product, nama FROM orders WHERE order_id = ?")
-            .bind(row.order_id).first<{ product: string; nama: string }>().catch(() => null);
-          if (o?.product) product = o.product;
+        // Refresh judul/deskripsi best-effort (gagal = biarkan, booking tetap confirmed).
+        try {
+          await patchEvent(env, cur.gcal_event_id, content);
+        } catch (e) {
+          console.log(`[support-bookings] refresh judul #${id} dilewati: ${String(e).slice(0, 200)}`);
         }
-        const who = await env.DB.prepare("SELECT name FROM customers WHERE lower(email) = ?")
-          .bind(String(row.customer_email).toLowerCase()).first<{ name: string }>().catch(() => null);
-        const picLabel = row.pic_type === "account_executive" ? "Account Executive" : "AI Engineer";
+      } else {
         const ev = await createMeetEvent(env, {
-          summary: `Support ${product} — ${who?.name || row.customer_email}`,
-          description:
-            `Booking support Malika Agent\nPIC: ${picLabel} (@${row.staff_username})\n` +
-            `Customer: ${row.customer_email}\nOrder: ${row.order_id || "-"}\n\nKebutuhan:\n${row.description}`,
+          ...content,
           customerEmail: row.customer_email,
           startWib: String(row.scheduled_at).slice(0, 16),
           durationMin: Number(row.duration_min) || 30,
