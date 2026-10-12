@@ -44,13 +44,16 @@ async function customerPic(env: Env, email: string, pic: string): Promise<string
 }
 
 // GET — daftar booking.
+// ?as=customer -> paksa identitas customer (halaman customer mengirim ini agar
+// cookie sesi staff di browser yang sama tidak membajak jadi scope staff).
 export async function onRequestGet({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   await ensureSupportTables(env.DB);
   const params = new URL(request.url).searchParams;
   const status = (params.get("status") ?? "").slice(0, 16);
+  const forceCustomer = params.get("as") === "customer";
 
-  const s = await getSession(request, env);
+  const s = forceCustomer ? null : await getSession(request, env);
   if (s) {
     const scope = params.get("scope") ?? "mine";
     if (scope === "all" && !canManageUsers(s) && s.division !== "admin") {
@@ -163,6 +166,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
 }
 
 // PATCH {id, status} — PIC/admin; customer hanya boleh cancel miliknya.
+// ?as=customer -> paksa identitas customer (alasan sama seperti GET).
 export async function onRequestPatch({ request, env }: { request: Request; env: Env }) {
   if (!env.DB) return new Response(JSON.stringify({ error: "D1 not bound" }), { status: 500, headers: cors });
   let b: { id?: unknown; status?: unknown };
@@ -185,7 +189,8 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
     }>().catch(() => null);
   if (!row) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
 
-  const s = await getSession(request, env);
+  const forceCustomer = new URL(request.url).searchParams.get("as") === "customer";
+  const s = forceCustomer ? null : await getSession(request, env);
   const by = s ? s.username : "";
   if (s) {
     const isOwner = row.staff_username === s.username;

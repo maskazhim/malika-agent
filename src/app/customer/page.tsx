@@ -427,7 +427,7 @@ function SupportPanel({
     setListLoading(true);
     setListError(null);
     try {
-      const res = await fetch("/api/support-bookings");
+      const res = await fetch("/api/support-bookings?as=customer");
       if (res.status === 401) {
         setListError("Sesi habis — keluar lalu login ulang ya.");
         setBookings([]);
@@ -518,7 +518,7 @@ function SupportPanel({
   async function cancel(id: number) {
     if (!window.confirm("Batalkan booking ini?")) return;
     try {
-      const res = await fetch("/api/support-bookings", {
+      const res = await fetch("/api/support-bookings?as=customer", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status: "cancelled" }),
