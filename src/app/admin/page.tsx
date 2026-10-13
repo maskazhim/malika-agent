@@ -862,12 +862,22 @@ export default function AdminPage() {
                     <p className="text-xs text-stone-500">{o.email}</p>
                     {(() => {
                       const a = assignMap[(o.email || "").toLowerCase()];
-                      const ai = a?.ai_engineer || "";
-                      if (!ai) return null;
+                      const ai = a?.ai_engineer?.trim() || "";
+                      const rt = a?.retensi?.trim() || "";
+                      if (!ai && !rt) return null;
                       return (
-                        <p className="mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800" title={`Support: ${a.support || "-"} · IT: ${a.it || "-"} · Sales: ${a.sales || "-"}`}>
-                          🤖 {ai}
-                        </p>
+                        <span className="mt-1 flex flex-wrap gap-1">
+                          {ai && (
+                            <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800" title={`AI Engineer: ${ai} · Support: ${a.support || "-"} · IT: ${a.it || "-"} · Sales: ${a.sales || "-"}`}>
+                              🤖 {ai}
+                            </span>
+                          )}
+                          {rt && (
+                            <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title={`Retensi: ${rt}`}>
+                              🤝 {rt}
+                            </span>
+                          )}
+                        </span>
                       );
                     })()}
                   </td>
@@ -903,11 +913,26 @@ export default function AdminPage() {
                       </button>
                     )}
                     {(o.status === "retensi" || o.status === "resubscribe" || o.status === "churn") && (
-                      <p className="mt-1 text-[11px] text-stone-500">
-                        {o.renewal_count > 0 ? `Perpanjangan ke-${o.renewal_count} · ` : ""}
-                        {o.status === "churn" ? "berhenti" : `aktif s/d ${expiryOf(o, dueMap[o.order_id])}`}
-                        {dueMap[o.order_id]?.tempo_at ? " · server" : ""}
-                      </p>
+                      <>
+                        <p className="mt-1 text-[11px] text-stone-500">
+                          {o.renewal_count > 0 ? `Perpanjangan ke-${o.renewal_count} · ` : ""}
+                          {o.status === "churn" ? "berhenti" : `aktif s/d ${expiryOf(o, dueMap[o.order_id])}`}
+                          {dueMap[o.order_id]?.tempo_at ? " · server" : ""}
+                        </p>
+                        {(() => {
+                          const a = assignMap[(o.email || "").toLowerCase()];
+                          const ai = a?.ai_engineer?.trim() || "";
+                          const rt = a?.retensi?.trim() || "";
+                          if (!ai && !rt) return null;
+                          return (
+                            <p className="mt-0.5 text-[11px] text-stone-500">
+                              {ai ? `AI: ${ai}` : ""}
+                              {ai && rt ? " · " : ""}
+                              {rt ? `Retensi: ${rt}` : ""}
+                            </p>
+                          );
+                        })()}
+                      </>
                     )}
                   </td>
                   <td className="px-4 py-3">
