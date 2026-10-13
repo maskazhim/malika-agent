@@ -863,13 +863,19 @@ export default function AdminPage() {
                     {(() => {
                       const a = assignMap[(o.email || "").toLowerCase()];
                       const ai = a?.ai_engineer?.trim() || "";
+                      const sp = a?.support?.trim() || "";
                       const rt = a?.retensi?.trim() || "";
-                      if (!ai && !rt) return null;
+                      if (!ai && !sp && !rt) return null;
                       return (
                         <span className="mt-1 flex flex-wrap gap-1">
                           {ai && (
-                            <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800" title={`AI Engineer: ${ai} · Support: ${a.support || "-"} · IT: ${a.it || "-"} · Sales: ${a.sales || "-"}`}>
+                            <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800" title={`AI Engineer: ${ai} · IT: ${a.it || "-"} · Sales: ${a.sales || "-"}`}>
                               🤖 {ai}
+                            </span>
+                          )}
+                          {sp && (
+                            <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800" title={`Support: ${sp}`}>
+                              🎧 {sp}
                             </span>
                           )}
                           {rt && (
@@ -922,13 +928,12 @@ export default function AdminPage() {
                         {(() => {
                           const a = assignMap[(o.email || "").toLowerCase()];
                           const ai = a?.ai_engineer?.trim() || "";
+                          const sp = a?.support?.trim() || "";
                           const rt = a?.retensi?.trim() || "";
-                          if (!ai && !rt) return null;
+                          if (!ai && !sp && !rt) return null;
                           return (
                             <p className="mt-0.5 text-[11px] text-stone-500">
-                              {ai ? `AI: ${ai}` : ""}
-                              {ai && rt ? " · " : ""}
-                              {rt ? `Retensi: ${rt}` : ""}
+                              {[ai ? `AI: ${ai}` : "", sp ? `Support: ${sp}` : "", rt ? `Retensi: ${rt}` : ""].filter(Boolean).join(" · ")}
                             </p>
                           );
                         })()}
