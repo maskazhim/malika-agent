@@ -521,29 +521,43 @@ async function patchOneOrder(
       console.log(`[orders] email akses agent gagal: ${String(e).slice(0, 200)}`);
     }
   }
-  // Order masuk setup_server: pastikan assignment PIC per customer email ada.
-  // AI engineer dirotasi by load bila kosong; divisi lain diisi single-person.
-  // Best-effort — kegagalan assign tidak menggagalkan pindah status.
+  // Order terverifikasi: pastikan baris PIC ada dengan PIC awal saja
+  // (sales/marketing). PIC teknis menyusul di bawah agar order masuk tidak
+  // langsung terbebani ke AI Engineer. Best-effort.
+  if (changed.includes("status") && status === "verified") {
+    try {
+      await ensureEarlyAssignment(env, order_id, s.username);
+    } catch (e) {
+      console.log(`[orders] early-assign ${order_id} dilewati: ${String(e).slice(0, 200)}`);
+    }
+  }
+  // Order masuk setup_server: isi PIC teknis yang masih kosong
+  // (support/it/retensi = user aktif pertama, ai_engineer = load terkecil).
   if (changed.includes("status") && status === "setup_server") {
     try {
-      await ensureAssignment(env, order_id, s.username);
+      await ensureTechAssignment(env, order_id, s.username);
     } catch (e) {
       console.log(`[orders] auto-assign ${order_id} dilewati: ${String(e).slice(0, 200)}`);
+    }
+  }
+  // Order dibatalkan: cabut semua PIC bila email ini sudah tak punya order aktif
+  // (agar hitungan beban klien tetap valid). Best-effort.
+  if (changed.includes("status") && status === "cancelled") {
+    try {
+      await revokeAssignmentIfInactive(env, order_id, s.username);
+    } catch (e) {
+      console.log(`[orders] revoke-assign ${order_id} dilewati: ${String(e).slice(0, 200)}`);
     }
   }
   return changed;
 }
 
-/* Assignment PIC per customer email (auto saat masuk setup_server).
-   - Baris dibuat bila belum ada; divisi single-person diisi user aktif pertama.
-   - ai_engineer kosong → user ai_engineer aktif dengan load (COUNT) terkecil. */
-async function ensureAssignment(env: Env, order_id: string, by: string): Promise<void> {
-  const ord = await env.DB.prepare("SELECT email FROM orders WHERE order_id = ?")
-    .bind(order_id)
-    .first<{ email: string }>()
-    .catch(() => null);
-  const email = String(ord?.email ?? "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+/* Assignment PIC per customer email.
+   - ensureEarlyAssignment (dipanggil saat verified): buat baris bila belum ada,
+     isi hanya sales + marketing. PIC teknis dibiarkan kosong.
+   - ensureTechAssignment (dipanggil saat setup_server): pastikan baris ada,
+     lalu isi support/it/retensi/ai_engineer yang masih kosong. */
+async function ensureClientAssignmentsTable(env: Env): Promise<void> {
   await env.DB.prepare(
     `CREATE TABLE IF NOT EXISTS client_assignments (
       email TEXT PRIMARY KEY, sales TEXT NOT NULL DEFAULT '', marketing TEXT NOT NULL DEFAULT '',
@@ -551,36 +565,69 @@ async function ensureAssignment(env: Env, order_id: string, by: string): Promise
       ai_engineer TEXT NOT NULL DEFAULT '', retensi TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '')`
   ).run().catch(() => {});
+}
+
+async function orderEmail(env: Env, order_id: string): Promise<string> {
+  const ord = await env.DB.prepare("SELECT email FROM orders WHERE order_id = ?")
+    .bind(order_id)
+    .first<{ email: string }>()
+    .catch(() => null);
+  return String(ord?.email ?? "").trim().toLowerCase();
+}
+
+async function firstActiveUser(env: Env, division: string): Promise<string> {
+  const r = await env.DB.prepare("SELECT username FROM users WHERE division = ? AND active = 1 ORDER BY id ASC LIMIT 1")
+    .bind(division).first<{ username: string }>().catch(() => null);
+  return r?.username ?? "";
+}
+
+// AI engineer dengan load terkecil.
+async function leastLoadedAi(env: Env): Promise<string> {
+  const cands = await env.DB.prepare("SELECT username FROM users WHERE division = 'ai_engineer' AND active = 1 ORDER BY id ASC LIMIT 50")
+    .all<{ username: string }>().catch(() => ({ results: [] as never[] }));
+  const list = (cands.results ?? []).map((r) => r.username).filter(Boolean);
+  if (list.length === 0) return "";
+  if (list.length === 1) return list[0];
+  const loads = await env.DB.prepare(
+    `SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments WHERE ai_engineer IN (${list.map(() => "?").join(",")}) GROUP BY ai_engineer`
+  ).bind(...list).all<{ pic: string; n: number }>().catch(() => ({ results: [] as never[] }));
+  const n: Record<string, number> = {};
+  for (const r of loads.results ?? []) n[r.pic] = Number(r.n ?? 0);
+  let best = list[0];
+  for (const u of list) if ((n[u] ?? 0) < (n[best] ?? 0)) best = u;
+  return best;
+}
+
+async function ensureEarlyAssignment(env: Env, order_id: string, by: string): Promise<void> {
+  const email = await orderEmail(env, order_id);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+  await ensureClientAssignmentsTable(env);
   const cur = await env.DB.prepare("SELECT * FROM client_assignments WHERE email = ?")
     .bind(email).first<Record<string, string>>().catch(() => null);
-  if (cur && String(cur.ai_engineer ?? "").trim()) return; // sudah ada PIC AI — jangan ganggu
+  if (cur) return; // sudah ada — jangan ganggu (termasuk PIC manual)
   const now = new Date().toISOString();
-  // Default single-person: user aktif pertama per divisi.
-  async function firstActive(division: string): Promise<string> {
-    const r = await env.DB.prepare("SELECT username FROM users WHERE division = ? AND active = 1 ORDER BY id ASC LIMIT 1")
-      .bind(division).first<{ username: string }>().catch(() => null);
-    return r?.username ?? "";
-  }
-  // AI engineer dengan load terkecil.
-  async function leastLoadedAi(): Promise<string> {
-    const cands = await env.DB.prepare("SELECT username FROM users WHERE division = 'ai_engineer' AND active = 1 ORDER BY id ASC LIMIT 50")
-      .all<{ username: string }>().catch(() => ({ results: [] as never[] }));
-    const list = (cands.results ?? []).map((r) => r.username).filter(Boolean);
-    if (list.length === 0) return "";
-    if (list.length === 1) return list[0];
-    const loads = await env.DB.prepare(
-      `SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments WHERE ai_engineer IN (${list.map(() => "?").join(",")}) GROUP BY ai_engineer`
-    ).bind(...list).all<{ pic: string; n: number }>().catch(() => ({ results: [] as never[] }));
-    const n: Record<string, number> = {};
-    for (const r of loads.results ?? []) n[r.pic] = Number(r.n ?? 0);
-    let best = list[0];
-    for (const u of list) if ((n[u] ?? 0) < (n[best] ?? 0)) best = u;
-    return best;
-  }
-  const patch: Record<string, string> = {};
+  const sales = await firstActiveUser(env, "sales");
+  const marketing = await firstActiveUser(env, "marketing");
+  await env.DB.prepare(
+    `INSERT INTO client_assignments (email, sales, marketing, support, it, ai_engineer, retensi, updated_at, updated_by)
+     VALUES (?, ?, ?, '', '', '', '', ?, ?)
+     ON CONFLICT(email) DO NOTHING`
+  ).bind(email, sales, marketing, now, by).run();
+}
+
+async function ensureTechAssignment(env: Env, order_id: string, by: string): Promise<void> {
+  const email = await orderEmail(env, order_id);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+  await ensureClientAssignmentsTable(env);
+  const cur = await env.DB.prepare("SELECT * FROM client_assignments WHERE email = ?")
+    .bind(email).first<Record<string, string>>().catch(() => null);
+  const now = new Date().toISOString();
   if (!cur) {
-    for (const d of ["sales", "marketing", "support", "it", "retensi"]) patch[d] = await firstActive(d);
-    patch.ai_engineer = await leastLoadedAi();
+    // Baris belum ada (mis. order lompat langsung ke setup): buat lengkap —
+    // awal sales/marketing + teknis sekaligus agar tidak kosong.
+    const patch: Record<string, string> = {};
+    for (const d of ["sales", "marketing", "support", "it", "retensi"]) patch[d] = await firstActiveUser(env, d);
+    patch.ai_engineer = await leastLoadedAi(env);
     const cols = Object.keys(patch);
     if (cols.length === 0) return;
     await env.DB.prepare(
@@ -588,15 +635,46 @@ async function ensureAssignment(env: Env, order_id: string, by: string): Promise
        VALUES (?, ${cols.map(() => "?").join(", ")}, ?, ?)
        ON CONFLICT(email) DO NOTHING`
     ).bind(email, ...cols.map((c) => patch[c]), now, by).run();
-  } else {
-    if (!String(cur.ai_engineer ?? "").trim()) {
-      const ai = await leastLoadedAi();
-      if (ai) {
-        await env.DB.prepare("UPDATE client_assignments SET ai_engineer = ?, updated_at = ?, updated_by = ? WHERE email = ?")
-          .bind(ai, now, by, email).run();
-      }
+    return;
+  }
+  // Baris sudah ada (umumnya dari verified): isi kolom teknis yang masih kosong.
+  const patch: Record<string, string> = {};
+  for (const d of ["support", "it", "retensi"]) {
+    if (!String(cur[d] ?? "").trim()) {
+      const u = await firstActiveUser(env, d);
+      if (u) patch[d] = u;
     }
   }
+  if (!String(cur.ai_engineer ?? "").trim()) {
+    const ai = await leastLoadedAi(env);
+    if (ai) patch.ai_engineer = ai;
+  }
+  const cols = Object.keys(patch);
+  if (cols.length === 0) return;
+  await env.DB.prepare(
+    `UPDATE client_assignments SET ${cols.map((c) => `${c} = ?`).join(", ")}, updated_at = ?, updated_by = ? WHERE email = ?`
+  ).bind(...cols.map((c) => patch[c]), now, by, email).run();
+}
+
+/* Hapus baris PIC satu email bila sudah tak punya order aktif (status != 'cancelled').
+   Dipakai saat order dibatalkan / dihapus agar customer batal hilang dari PIC Klien
+   dan hitungan beban klien tetap valid.
+   Satu email bisa punya banyak order — selama masih ada satu order aktif, PIC tetap. */
+async function revokeAssignmentByEmail(env: Env, rawEmail: string, by: string): Promise<void> {
+  const email = String(rawEmail ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+  await ensureClientAssignmentsTable(env);
+  const active = await env.DB.prepare(
+    "SELECT 1 FROM orders WHERE lower(email) = ? AND status != 'cancelled' LIMIT 1"
+  ).bind(email).first().catch(() => null);
+  if (active) return; // masih ada order aktif — PIC tetap dipertahankan
+  await env.DB.prepare("DELETE FROM client_assignments WHERE email = ?")
+    .bind(email).run().catch(() => {});
+  console.log(`[orders] assignment ${email} dihapus oleh ${by} (tak ada order aktif)`);
+}
+
+async function revokeAssignmentIfInactive(env: Env, order_id: string, by: string): Promise<void> {
+  await revokeAssignmentByEmail(env, await orderEmail(env, order_id), by);
 }
 
 // DELETE /api/orders?order_id=xxx — khusus admin (hapus order permanen).
@@ -628,6 +706,10 @@ export async function onRequestDelete({ request, env }: { request: Request; env:
   }
   if (bulkIds.length > 0) {
     const ids = [...new Set(bulkIds)].slice(0, 100);
+    // Catat email sebelum dihapus (untuk revoke PIC bila tak ada order aktif tersisa).
+    const emailRows = await env.DB.prepare(
+      `SELECT email FROM orders WHERE order_id IN (${ids.map(() => "?").join(",")})`
+    ).bind(...ids).all<{ email: string }>().catch(() => ({ results: [] as { email: string }[] }));
     const deleted: string[] = [];
     const not_found: string[] = [];
     for (const id of ids) {
@@ -636,17 +718,35 @@ export async function onRequestDelete({ request, env }: { request: Request; env:
         .run()) as { meta?: { changes?: number } };
       (res?.meta?.changes ? deleted : not_found).push(id);
     }
+    // Revoke PIC per email yang ordernya habis terhapus (best-effort).
+    for (const em of new Set((emailRows.results ?? []).map((r) => String(r.email ?? "")))) {
+      try {
+        await revokeAssignmentByEmail(env, em, s.username);
+      } catch (e) {
+        console.log(`[orders] revoke-assign hapus massal dilewati: ${String(e).slice(0, 200)}`);
+      }
+    }
     return Response.json({ ok: true, deleted, not_found }, { headers: cors });
   }
 
   if (!order_id) {
     return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
   }
+  const target = await env.DB.prepare("SELECT email FROM orders WHERE order_id = ?")
+    .bind(order_id).first<{ email: string }>().catch(() => null);
   const res = (await env.DB.prepare("DELETE FROM orders WHERE order_id = ?")
     .bind(order_id)
     .run()) as { meta?: { changes?: number } };
   if (!res?.meta?.changes) {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
+  }
+  // Revoke PIC bila email ini sudah tak punya order aktif tersisa (best-effort).
+  if (target) {
+    try {
+      await revokeAssignmentByEmail(env, target.email, s.username);
+    } catch (e) {
+      console.log(`[orders] revoke-assign hapus ${order_id} dilewati: ${String(e).slice(0, 200)}`);
+    }
   }
   return Response.json({ ok: true, order_id }, { headers: cors });
 }

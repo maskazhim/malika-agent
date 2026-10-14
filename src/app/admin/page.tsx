@@ -46,6 +46,7 @@ const DIVISION_LABEL: Record<string, string> = {
 
 const FILTERS = [
   { key: "", label: "Semua" },
+  { key: "checkout", label: "Belum bayar" },
   { key: "payment_proof", label: "Perlu verifikasi" },
   { key: "verified", label: "Terverifikasi" },
   { key: "setup_server", label: "Set up server" },
@@ -53,7 +54,6 @@ const FILTERS = [
   { key: "retensi", label: "Retensi" },
   { key: "churn", label: "Churn" },
   { key: "resubscribe", label: "Resubscribe" },
-  { key: "checkout", label: "Belum bayar" },
   { key: "cancelled", label: "Batal" },
 ];
 
@@ -1904,6 +1904,25 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
   );
 }
 
+/* Baca body JSON dengan aman: kalau server mengembalikan HTML (mis. 404 Next
+   saat `next dev` / static export tanpa Pages Functions), lempar pesan ramah
+   alih-alih "Failed to execute 'json' on 'Response'". */
+async function readJsonSafe(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.trim().slice(0, 80);
+    if (snippet.startsWith("<!DOCTYPE") || snippet.startsWith("<html")) {
+      throw new Error(
+        `API /api/assignments tidak tersedia (HTTP ${res.status}, dapat HTML). Jalankan via Cloudflare Pages / wrangler dengan binding D1.`
+      );
+    }
+    throw new Error(`Respon server bukan JSON (HTTP ${res.status}).`);
+  }
+}
+
 function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [staff, setStaff] = useState<Record<string, { username: string; name: string }[]>>({});
@@ -1919,12 +1938,12 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
     setLoading(true);
     try {
       const res = await fetch("/api/assignments");
-      if (!res.ok) throw new Error("gagal");
-      const data = (await res.json()) as {
+      const data = (await readJsonSafe(res)) as {
         assignments?: AssignmentRow[];
         staff?: Record<string, { username: string; name: string }[]>;
         ai_loads?: Record<string, number>;
       };
+      if (!res.ok) throw new Error((data as { error?: string })?.error ?? "gagal");
       setRows(data.assignments ?? []);
       setStaff(data.staff ?? {});
       setLoads(data.ai_loads ?? {});
@@ -1958,8 +1977,8 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, ...d }),
       });
-      const data = (await res.json()) as { ok?: boolean; assignment?: AssignmentRow; error?: string };
-      if (!res.ok || !data.ok || !data.assignment) throw new Error(data.error ?? "gagal");
+      const data = (await readJsonSafe(res)) as { ok?: boolean; assignment?: AssignmentRow; error?: string };
+      if (!res.ok || !data?.ok || !data.assignment) throw new Error(data?.error ?? `gagal (HTTP ${res.status})`);
       setRows((rs) => rs.map((r) => (r.email === email ? data.assignment as AssignmentRow : r)));
       setDrafts((x) => {
         const copy = { ...x };
@@ -1990,10 +2009,10 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string; defaults?: boolean };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "gagal");
+      const data = (await readJsonSafe(res)) as { ok?: boolean; error?: string; defaults?: boolean };
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? `gagal (HTTP ${res.status})`);
       setNewEmail("");
-      setMsg(data.defaults ? `Baris ${email} dibuat dengan PIC default — ubah dropdown bila perlu lalu Simpan.` : `Baris ${email} dibuat — pilih PIC lalu simpan.`);
+      setMsg(data.defaults ? `Baris ${email} dibuat dengan PIC awal (sales/marketing) — PIC teknis diisi otomatis setelah pembayaran terverifikasi.` : `Baris ${email} dibuat — pilih PIC lalu simpan.`);
       void load();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Gagal menambah.");
@@ -2024,7 +2043,7 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
       <div className="glass-strong rounded-3xl p-6">
         <h2 className="text-base font-bold">Beban AI Engineer (rotasi otomatis)</h2>
         <p className="mt-1 text-xs text-stone-500">
-          Order baru yang masuk set up server otomatis dapat AI engineer dengan beban terkecil.
+          Order baru hanya dapat PIC awal (sales/marketing). AI engineer + support/IT/retensi diisi otomatis setelah pembayaran terverifikasi, dengan AI engineer beban terkecil.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           {aiOptions.length === 0 ? (
@@ -2068,7 +2087,7 @@ function AssignmentsManager({ canAssign }: { canAssign: boolean }) {
         {loading ? (
           <p className="p-8 text-center text-sm text-stone-500">Memuat PIC…</p>
         ) : visible.length === 0 ? (
-          <p className="p-8 text-center text-sm text-stone-500">Belum ada assignment. Baris dibuat otomatis saat order masuk set up server.</p>
+          <p className="p-8 text-center text-sm text-stone-500">Belum ada assignment. Baris dibuat otomatis setelah pembayaran terverifikasi.</p>
         ) : (
           <table className="w-full min-w-3xl text-left text-sm">
             <thead>

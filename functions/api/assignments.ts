@@ -101,8 +101,9 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       updated_at TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '')`
   ).run().catch(() => {});
 
-  // Buat baris baru hanya dari email (tanpa field divisi): isi PIC default —
-  // divisi single-person = user aktif pertama, ai_engineer = beban terkecil.
+  // Buat baris baru hanya dari email (tanpa field divisi): isi PIC awal saja
+  // (sales + marketing). PIC teknis (support/it/ai_engineer/retensi) dikosongkan
+  // dan diisi otomatis setelah pembayaran terverifikasi (lihat orders.ts).
   if (DIVISIONS.every((d) => b[d] === undefined)) {
     const exists = await env.DB.prepare("SELECT email FROM client_assignments WHERE email = ?")
       .bind(email).first().catch(() => null);
@@ -115,20 +116,15 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
         .bind(division).first<{ username: string }>().catch(() => null);
       return r?.username ?? "";
     }
-    const cands = await env.DB.prepare("SELECT username FROM users WHERE division = 'ai_engineer' AND active = 1 ORDER BY id ASC LIMIT 50")
-      .all<{ username: string }>().catch(() => ({ results: [] as never[] }));
-    const aiList = (cands.results ?? []).map((r) => r.username).filter(Boolean);
-    let ai = aiList[0] ?? "";
-    if (aiList.length > 1) {
-      const loads = await env.DB.prepare(
-        `SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments WHERE ai_engineer IN (${aiList.map(() => "?").join(",")}) GROUP BY ai_engineer`
-      ).bind(...aiList).all<{ pic: string; n: number }>().catch(() => ({ results: [] as never[] }));
-      const n: Record<string, number> = {};
-      for (const r of loads.results ?? []) n[r.pic] = Number(r.n ?? 0);
-      for (const u of aiList) if ((n[u] ?? 0) < (n[ai] ?? 0)) ai = u;
-    }
-    const def: Record<string, string> = { ai_engineer: ai };
-    for (const d of ["sales", "marketing", "support", "it", "retensi"]) def[d] = await firstActive(d);
+    // Order masuk: hanya sales/marketing. Teknis menyusul setelah verified.
+    const def: Record<string, string> = {
+      sales: await firstActive("sales"),
+      marketing: await firstActive("marketing"),
+      support: "",
+      it: "",
+      ai_engineer: "",
+      retensi: "",
+    };
     await env.DB.prepare(
       `INSERT INTO client_assignments (email, sales, marketing, support, it, ai_engineer, retensi, updated_at, updated_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
