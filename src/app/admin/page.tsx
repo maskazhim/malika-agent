@@ -116,6 +116,20 @@ function expiryOf(o: Order, due?: { tempo: string; tempo_at: string }): string {
   return exp.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// Belum bayar (checkout) menunggak: >= 3 hari tanpa pembayaran.
+const OVERDUE_MS = 3 * 864e5;
+function createdMs(o: Order): number {
+  const t = o.created_at ? new Date(o.created_at).getTime() : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+function overdueDays(o: Order): number {
+  if (o.status !== "checkout" || !createdMs(o)) return 0;
+  return Math.floor((Date.now() - createdMs(o)) / 864e5);
+}
+function isOverdueUnpaid(o: Order): boolean {
+  return overdueDays(o) >= 3;
+}
+
 // Field deploy_configs yang bisa diedit via popup Config (dikelompokkan).
 type CfgKind = "text" | "check" | "area" | "view";
 const CFG_GROUPS: { title: string; fields: { key: string; label: string; kind: CfgKind }[] }[] = [
@@ -630,6 +644,16 @@ export default function AdminPage() {
       .join(" ")
       .toLowerCase()
       .includes(s);
+  }).sort((a, b) => {
+    // Di tab Belum bayar: yang menunggak >= 3 hari naik ke paling atas,
+    // diurutkan dari yang terlama agar segera dikonfirmasi (batal/lanjut).
+    if (filter === "checkout") {
+      const ao = isOverdueUnpaid(a) ? 1 : 0;
+      const bo = isOverdueUnpaid(b) ? 1 : 0;
+      if (ao !== bo) return bo - ao;
+      if (ao && bo) return createdMs(a) - createdMs(b);
+    }
+    return 0; // pertahankan urutan server (terbaru dulu)
   });
 
   // Indeterminate pada checkbox header bila sebagian baris tampil yang dipilih.
@@ -832,9 +856,10 @@ export default function AdminPage() {
             </thead>
             <tbody>
               {visibleOrders.map((o) => {
+                const overdue = isOverdueUnpaid(o);
                 return (
                 <Fragment key={o.order_id}>
-                <tr className={`border-b border-white/50 last:border-0 hover:bg-white/40 ${selected.includes(o.order_id) ? "bg-teal-50/50" : ""}`}>
+                <tr className={`border-b border-white/50 last:border-0 hover:bg-white/40 ${selected.includes(o.order_id) ? "bg-teal-50/50" : ""} ${overdue ? "bg-red-50/70 shadow-[inset_3px_0_0_0_#dc2626]" : ""}`}>
                   <td className="px-4 py-3">
                     <input
                       type="checkbox"
@@ -846,6 +871,11 @@ export default function AdminPage() {
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-semibold">{o.product}</p>
+                    {overdue && (
+                      <p className="mt-0.5 inline-block rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-bold text-white">
+                        ⚠ {overdueDays(o)} hari belum bayar — konfirmasi batal/lanjut
+                      </p>
+                    )}
                     <p className="font-mono text-[11px] text-stone-400">{o.order_id.slice(0, 8)}…</p>
                     {o.subdomain && (
                       <p className="font-mono text-[11px] font-semibold text-teal-700">agent-{o.subdomain}.malika.ai</p>

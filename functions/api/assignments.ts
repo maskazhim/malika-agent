@@ -167,11 +167,14 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     return new Response(JSON.stringify({ error: "tidak ada field diubah" }), { status: 400, headers: cors });
   }
   const now = new Date().toISOString();
+  // Kolom SET ambil dari excluded.* agar jumlah placeholder ? pas dengan bindings
+  // (SQLite menghitung tiap ? sebagai parameter posisi — tidak boleh dipakai 2x).
+  const cols = sets.map((x) => x.split(" ")[0]);
   try {
     await env.DB.prepare(
-      `INSERT INTO client_assignments (email, ${sets.map((x) => x.split(" ")[0]).join(", ")}, updated_at, updated_by)
-       VALUES (?, ${sets.map(() => "?").join(", ")}, ?, ?)
-       ON CONFLICT(email) DO UPDATE SET ${sets.join(", ")}, updated_at=excluded.updated_at, updated_by=excluded.updated_by`
+      `INSERT INTO client_assignments (email, ${cols.join(", ")}, updated_at, updated_by)
+       VALUES (?, ${cols.map(() => "?").join(", ")}, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET ${cols.map((c) => `${c}=excluded.${c}`).join(", ")}, updated_at=excluded.updated_at, updated_by=excluded.updated_by`
     ).bind(email, ...vals, now, s.username).run();
   } catch (e) {
     return new Response(JSON.stringify({ error: `gagal menyimpan: ${String(e).slice(0, 160)}` }), { status: 500, headers: cors });
