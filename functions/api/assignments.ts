@@ -44,10 +44,13 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     return Response.json({ ok: true, assignment: row ?? null }, { headers: cors });
   }
 
-  let query = "SELECT * FROM client_assignments";
+  // Hanya tampilkan email yang masih punya order aktif (status != 'cancelled').
+  // Customer batal otomatis hilang dari daftar PIC Klien.
+  const ACTIVE = "EXISTS (SELECT 1 FROM orders WHERE lower(orders.email) = lower(client_assignments.email) AND orders.status != 'cancelled')";
+  let query = `SELECT * FROM client_assignments WHERE ${ACTIVE}`;
   const vals: unknown[] = [];
   if (search) {
-    query += " WHERE lower(email) LIKE ? OR lower(sales) LIKE ? OR lower(marketing) LIKE ? OR lower(support) LIKE ? OR lower(it) LIKE ? OR lower(ai_engineer) LIKE ? OR lower(retensi) LIKE ?";
+    query += " AND (lower(client_assignments.email) LIKE ? OR lower(sales) LIKE ? OR lower(marketing) LIKE ? OR lower(support) LIKE ? OR lower(it) LIKE ? OR lower(ai_engineer) LIKE ? OR lower(retensi) LIKE ?)";
     const like = `%${search}%`;
     vals.push(like, like, like, like, like, like, like);
   }
@@ -66,7 +69,9 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
   }
   const loads: Record<string, number> = {};
   const loadRows = await env.DB.prepare(
-    "SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments WHERE ai_engineer != '' GROUP BY ai_engineer"
+    `SELECT ai_engineer AS pic, COUNT(*) AS n FROM client_assignments
+     WHERE ai_engineer != '' AND EXISTS (SELECT 1 FROM orders WHERE lower(orders.email) = lower(client_assignments.email) AND orders.status != 'cancelled')
+     GROUP BY ai_engineer`
   ).all<{ pic: string; n: number }>().catch(() => ({ results: [] as never[] }));
   for (const r of loadRows.results ?? []) loads[r.pic] = Number(r.n ?? 0);
 
@@ -125,11 +130,15 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
       ai_engineer: "",
       retensi: "",
     };
-    await env.DB.prepare(
-      `INSERT INTO client_assignments (email, sales, marketing, support, it, ai_engineer, retensi, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(email) DO NOTHING`
-    ).bind(email, def.sales, def.marketing, def.support, def.it, def.ai_engineer, def.retensi, now, s.username).run();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO client_assignments (email, sales, marketing, support, it, ai_engineer, retensi, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(email) DO NOTHING`
+      ).bind(email, def.sales, def.marketing, def.support, def.it, def.ai_engineer, def.retensi, now, s.username).run();
+    } catch (e) {
+      return new Response(JSON.stringify({ error: `gagal menyimpan: ${String(e).slice(0, 160)}` }), { status: 500, headers: cors });
+    }
     const row = await env.DB.prepare("SELECT * FROM client_assignments WHERE email = ?")
       .bind(email).first().catch(() => null);
     return Response.json({ ok: true, assignment: row, defaults: true }, { headers: cors });
@@ -158,11 +167,15 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     return new Response(JSON.stringify({ error: "tidak ada field diubah" }), { status: 400, headers: cors });
   }
   const now = new Date().toISOString();
-  await env.DB.prepare(
-    `INSERT INTO client_assignments (email, ${sets.map((x) => x.split(" ")[0]).join(", ")}, updated_at, updated_by)
-     VALUES (?, ${sets.map(() => "?").join(", ")}, ?, ?)
-     ON CONFLICT(email) DO UPDATE SET ${sets.join(", ")}, updated_at=excluded.updated_at, updated_by=excluded.updated_by`
-  ).bind(email, ...vals, now, s.username).run();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO client_assignments (email, ${sets.map((x) => x.split(" ")[0]).join(", ")}, updated_at, updated_by)
+       VALUES (?, ${sets.map(() => "?").join(", ")}, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET ${sets.join(", ")}, updated_at=excluded.updated_at, updated_by=excluded.updated_by`
+    ).bind(email, ...vals, now, s.username).run();
+  } catch (e) {
+    return new Response(JSON.stringify({ error: `gagal menyimpan: ${String(e).slice(0, 160)}` }), { status: 500, headers: cors });
+  }
 
   const row = await env.DB.prepare("SELECT * FROM client_assignments WHERE email = ?")
     .bind(email).first().catch(() => null);
