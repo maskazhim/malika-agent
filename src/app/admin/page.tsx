@@ -318,6 +318,48 @@ export default function AdminPage() {
     setMenuFor(null);
   }
 
+  // Koreksi nominal transaksi (khusus admin — mis. diskon lupa pakai voucher).
+  async function setAmount(order_id: string, current: number) {
+    closeMenu();
+    setError(null);
+    setNotice(null);
+    const raw = window.prompt(
+      `Nominal transaksi baru (saat ini ${formatRp(current)}).\nTulis angka saja, contoh: 150000`,
+      String(current)
+    );
+    if (raw === null) return;
+    const amount = Math.round(Number(String(raw).replace(/[^0-9]/g, "")));
+    if (!Number.isFinite(amount) || amount < 0) {
+      setError("Nominal tidak valid.");
+      return;
+    }
+    if (amount === current) return;
+    setUpdating(order_id);
+    try {
+      const res = await fetch("/api/orders", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id, amount }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (res.status === 403) {
+        setError(data?.error ?? "Hanya admin yang boleh ubah nominal.");
+        return;
+      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setOrders((os) => os.map((o) => (o.order_id === order_id ? { ...o, amount } : o)));
+      setNotice(`Nominal order ${order_id.slice(0, 8)}… diubah ke ${formatRp(amount)}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal ubah nominal.");
+    } finally {
+      setUpdating(null);
+    }
+  }
+
   async function setStatus(order_id: string, status: string) {
     closeMenu();
     setUpdating(order_id);
@@ -1096,6 +1138,18 @@ export default function AdminPage() {
                                 className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-60"
                               >
                                 Batal
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={() => {
+                                  void setAmount(o.order_id, o.amount);
+                                }}
+                                disabled={updating === o.order_id}
+                                title="Koreksi nominal transaksi (mis. diskon lupa pakai voucher)"
+                                className="rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 ring-1 ring-stone-200 hover:bg-stone-100 disabled:opacity-60"
+                              >
+                                ✏️ Ubah nominal
                               </button>
                             )}
                             {isAdmin && (

@@ -33,6 +33,7 @@ interface Env {
 
 import {
   canDeleteOrder,
+  canManageCatalog,
   canSetGreeting,
   canSetOnboard,
   canTransition,
@@ -281,7 +282,8 @@ const KNOWN_STATUSES = [
   "cancelled",
 ];
 
-// PATCH /api/orders {order_id, status?, onboard_done?, greeting_done?} — staff sesuai matriks.
+// PATCH /api/orders {order_id, status?, onboard_done?, greeting_done?, amount?} — staff sesuai matriks.
+// amount (koreksi nominal transaksi) khusus admin, hanya mode satuan.
 // Bulk: {order_ids: [...maks 100], status?} — aturan izin yang sama per order,
 // hasil dilaporkan per item: {ok, results: [{order_id, ok, changed?, error?}]}.
 export async function onRequestPatch({ request, env }: { request: Request; env: Env }) {
@@ -290,7 +292,7 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   if (!s) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
   }
-  let b: { order_id?: unknown; order_ids?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown };
+  let b: { order_id?: unknown; order_ids?: unknown; status?: unknown; onboard_done?: unknown; greeting_done?: unknown; amount?: unknown };
   try {
     b = (await request.json()) as typeof b;
   } catch {
@@ -306,7 +308,8 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
       .filter(Boolean)
       .slice(0, 100);
     if (ids.length === 0) return new Response(JSON.stringify({ error: "order_ids required" }), { status: 400, headers: cors });
-    // Bulk hanya untuk pindah status (flag greeting tetap satuan via UI).
+    // Bulk hanya untuk pindah status (flag greeting & nominal tetap satuan via UI).
+    if (b.amount !== undefined) return new Response(JSON.stringify({ error: "amount hanya untuk update satuan" }), { status: 400, headers: cors });
     if (!status) return new Response(JSON.stringify({ error: "status required untuk bulk" }), { status: 400, headers: cors });
     if (!KNOWN_STATUSES.includes(status)) {
       return new Response(JSON.stringify({ error: "status tidak valid" }), { status: 400, headers: cors });
@@ -314,7 +317,7 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
     const results = [];
     for (const id of new Set(ids)) {
       try {
-        const changed = await patchOneOrder(env, s, id, status, undefined);
+        const changed = await patchOneOrder(env, s, id, status, undefined, undefined);
         results.push({ order_id: id, ok: true, changed });
       } catch (e) {
         const err = e as { status?: number; error?: string };
@@ -329,7 +332,7 @@ export async function onRequestPatch({ request, env }: { request: Request; env: 
   if (!order_id) return new Response(JSON.stringify({ error: "order_id required" }), { status: 400, headers: cors });
 
   try {
-    const changed = await patchOneOrder(env, s, order_id, status, greetingVal);
+    const changed = await patchOneOrder(env, s, order_id, status, greetingVal, b.amount);
     return Response.json({ ok: true, order_id, changed }, { headers: cors });
   } catch (e) {
     const err = e as { status?: number; error?: string };
@@ -344,7 +347,8 @@ async function patchOneOrder(
   s: Session,
   order_id: string,
   status: string,
-  greetingVal: unknown
+  greetingVal: unknown,
+  amountVal: unknown
 ): Promise<string[]> {
 
   // Ambil status + promo lama dulu (untuk guard transisi & hitung used_count tepat sekali).
@@ -370,7 +374,22 @@ async function patchOneOrder(
     changed.push("greeting_done");
   }
 
-  // 2) Pindah status pipeline.
+  // 2) Koreksi nominal transaksi (khusus admin — mis. diskon lupa pakai voucher).
+  if (amountVal !== undefined) {
+    if (!canManageCatalog(s)) {
+      throw { status: 403, error: "hanya admin yang boleh ubah nominal" };
+    }
+    const n = Math.round(Number(amountVal));
+    if (!Number.isFinite(n) || n < 0 || n > 999999999999) {
+      throw { status: 400, error: "nominal tidak valid" };
+    }
+    await env.DB.prepare("UPDATE orders SET amount = ? WHERE order_id = ?")
+      .bind(n, order_id)
+      .run();
+    changed.push("amount");
+  }
+
+  // 3) Pindah status pipeline.
   if (status) {
     if (!KNOWN_STATUSES.includes(status)) {
       throw { status: 400, error: "status tidak valid" };
