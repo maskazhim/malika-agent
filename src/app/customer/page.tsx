@@ -345,14 +345,13 @@ export default function CustomerPage() {
           ))}
         </div>
       )}
+      <RatingWidget />
     </main>
   );
 }
 
 const ID_DAY = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
-const ID_MONTH = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-
-/* "YYYY-MM-DDTHH:MM" -> "Sen, 12 Okt · 09:00" (tanpa konversi zona). */
+const ID_MONTH = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];/* "YYYY-MM-DDTHH:MM" -> "Sen, 12 Okt · 09:00" (tanpa konversi zona). */
 function fmtSlot(at: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at);
   if (!m) return at;
@@ -924,8 +923,7 @@ function AffiliatePanel() {
         )}
       </div>
       <div className="glass-strong rounded-3xl p-6">
-        <h2 className="text-base font-bold">Penghasilan Affiliate</h2>
-        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <h2 className="text-base font-bold">Penghasilan Affiliate</h2>        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
           <div className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
             <p className="text-xl font-bold">{referrals}</p>
             <p className="text-[11px] text-stone-500">Referral</p>
@@ -963,5 +961,187 @@ function AffiliatePanel() {
         )}
       </div>
     </div>
+  );
+}
+
+const FULL_MONTH = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+
+/* "2026-11" -> "November 2026". */
+function periodLabel(p: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(p);
+  if (!m) return p;
+  return `${FULL_MONTH[Number(m[2])] ?? m[2]} ${m[1]}`;
+}
+
+function starsText(n: number): string {
+  const v = Math.max(0, Math.min(5, Math.round(n)));
+  return v === 0 ? "☆ 0/5" : `${"★".repeat(v)}${"☆".repeat(5 - v)} ${v}/5`;
+}
+
+/* Widget penilaian AI engineer: tombol melayang (semua tab) + modal.
+   Klien bisa menilai kapan saja & merevisi kapan saja dalam bulan berjalan;
+   ganti bulan = terkunci final, mulai lembar baru. */
+function RatingWidget() {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState("");
+  const [pic, setPic] = useState<{ username: string; name: string } | null>(null);
+  const [mine, setMine] = useState<{ stars: number; message: string; updated_at: string } | null>(null);
+  const [history, setHistory] = useState<{ period: string; stars: number; message: string; updated_at: string }[]>([]);
+  const [stars, setStars] = useState(0);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/support-ratings?as=customer");
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        period?: string;
+        ai_engineer?: { username: string; name: string } | null;
+        mine?: { stars: number; message: string; updated_at: string } | null;
+        history?: { period: string; stars: number; message: string; updated_at: string }[];
+      };
+      setPeriod(data.period ?? "");
+      setPic(data.ai_engineer ?? null);
+      setMine(data.mine ?? null);
+      setHistory(data.history ?? []);
+      if (data.mine) {
+        setStars(Math.max(0, Math.min(5, Math.round(data.mine.stars))));
+        setMessage(data.mine.message ?? "");
+      }
+    } catch {
+      /* abaikan — tombol tetap bisa dibuka, error tampil saat simpan */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function openModal() {
+    setMsg(null);
+    if (mine) {
+      setStars(Math.max(0, Math.min(5, Math.round(mine.stars))));
+      setMessage(mine.message ?? "");
+    }
+    setOpen(true);
+  }
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/support-ratings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stars, message: message.trim() }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error ?? "gagal");
+      setMsg("Penilaian tersimpan — bisa kamu ubah lagi kapan saja bulan ini.");
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Gagal menyimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading || !pic) return null;
+
+  return (
+    <>
+      <button
+        onClick={openModal}
+        title="Nilai support AI engineer"
+        className="malika-gradient fixed bottom-5 right-5 z-50 rounded-full px-5 py-3 text-sm font-bold text-white shadow-xl hover:opacity-90"
+      >
+        ⭐ {mine ? starsText(mine.stars) : "Nilai AI Engineer"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-stone-900/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold">⭐ Nilai AI Engineer · {periodLabel(period)}</p>
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded-lg bg-white/70 px-2.5 py-1 text-xs ring-1 ring-stone-200 hover:bg-stone-100"
+                aria-label="Tutup"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-stone-500">
+              PIC kamu: <span className="font-bold text-stone-700">{pic.name}</span>{" "}
+              <span className="font-mono">@{pic.username}</span>
+            </p>
+            <div className="mt-3 rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100">
+              <div className="flex items-center justify-center gap-1">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setStars((s) => (s === i ? 0 : i))}
+                    aria-label={`${i} bintang`}
+                    className={`text-4xl leading-none transition ${i <= stars ? "text-amber-400" : "text-stone-300 hover:text-amber-200"}`}
+                  >
+                    {i <= stars && stars > 0 ? "★" : "☆"}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-center text-xs font-semibold text-stone-600">
+                {stars > 0 ? `${stars}/5` : "0/5 (tanpa bintang)"} · ketuk bintang yang sama lagi untuk 0
+              </p>
+            </div>
+            <label className="mt-3 block">
+              <span className="mb-1 block text-xs font-medium text-stone-500">
+                Pesan untuk AI engineer <span className="text-stone-400">(opsional)</span>
+              </span>
+              <textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                rows={3}
+                maxLength={1000}
+                placeholder="cth. Responnya cepat dan solutif, terima kasih!"
+                className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-400"
+              />
+            </label>
+            {msg && <p className="mt-2 text-xs font-medium text-stone-600">{msg}</p>}
+            <button
+              onClick={() => void save()}
+              disabled={saving}
+              className="malika-gradient mt-3 w-full rounded-full py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+            >
+              {saving ? "Menyimpan…" : mine ? "Simpan revisi" : "Kirim penilaian"}
+            </button>
+            {history.length > 0 && (
+              <div className="mt-4">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-stone-400">
+                  Penilaian lalu (final)
+                </p>
+                <div className="mt-2 space-y-2">
+                  {history.map((h) => (
+                    <div key={h.period} className="rounded-2xl bg-stone-50 p-3 ring-1 ring-stone-100">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-bold">{periodLabel(h.period)}</p>
+                        <span className="rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold text-stone-600">
+                          final
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-sm font-semibold text-amber-500">{starsText(h.stars)}</p>
+                      {h.message && <p className="mt-1 text-xs text-stone-600">{h.message}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

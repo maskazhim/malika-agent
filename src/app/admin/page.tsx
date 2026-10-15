@@ -1443,6 +1443,147 @@ interface SupportBooking {
 
 /* Tab Support internal: pengaturan durasi & jam kerja (admin), availability
    mingguan PIC (AI engineer / retensi / admin), dan booking masuk. */
+/* Rekap penilaian AI engineer oleh customer (tab Support).
+   Admin/bisdev = semua staff + filter staff/periode; ai_engineer = miliknya sendiri. */
+function RatingsRecap({
+  isAdmin, meUsername, meDivision, staffOpts,
+}: {
+  isAdmin: boolean; meUsername: string; meDivision: string;
+  staffOpts: { username: string; name: string; division: string }[];
+}) {
+  const canView = isAdmin || meDivision === "bisdev" || meDivision === "ai_engineer";
+  const [period, setPeriod] = useState("");
+  const [staff, setStaff] = useState("");
+  const [summary, setSummary] = useState<{ staff_username: string; count: number; avg: number; dist: number[] }[]>([]);
+  const [ratings, setRatings] = useState<{ staff_username: string; stars: number; message: string; customer_email: string; updated_at: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (per: string, st: string) => {
+    setLoading(true);
+    try {
+      const q = `/api/support-ratings?scope=recap${per ? `&period=${encodeURIComponent(per)}` : ""}${st ? `&staff=${encodeURIComponent(st)}` : ""}`;
+      const res = await fetch(q);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        period?: string;
+        summary?: { staff_username: string; count: number; avg: number; dist: number[] }[];
+        ratings?: { staff_username: string; stars: number; message: string; customer_email: string; updated_at: string }[];
+      };
+      if (data.period) setPeriod(data.period);
+      setSummary(data.summary ?? []);
+      setRatings(data.ratings ?? []);
+    } catch {
+      /* abaikan */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (canView) void load("", "");
+  }, [canView, load]);
+
+  if (!canView) return null;
+  const aiOpts = staffOpts.filter((o) => o.division === "ai_engineer");
+  const showStaffFilter = isAdmin || meDivision === "bisdev";
+  const staffName = (u: string) => aiOpts.find((o) => o.username === u)?.name ?? (u === meUsername ? meUsername : u);
+  const shown = showStaffFilter && staff ? summary.filter((s) => s.staff_username === staff) : summary;
+  const shownRatings = showStaffFilter && staff ? ratings.filter((r) => r.staff_username === staff) : ratings;
+
+  return (
+    <div className="glass-strong rounded-3xl p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold">⭐ Penilaian AI Engineer</h2>
+          <p className="mt-1 text-xs text-stone-500">
+            Bintang 0–5 + pesan dari customer · bisa direvisi sebulan berjalan, terkunci final ganti bulan.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <input
+            type="month"
+            value={period}
+            onChange={(e) => void load(e.target.value, staff)}
+            className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+          />
+          {showStaffFilter && (
+            <select
+              value={staff}
+              onChange={(e) => {
+                setStaff(e.target.value);
+                void load(period, e.target.value);
+              }}
+              className="rounded-xl border border-stone-200 bg-white/80 px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-teal-400"
+            >
+              <option value="">Semua engineer</option>
+              {aiOpts.map((u) => (
+                <option key={u.username} value={u.username}>{u.name} · @{u.username}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+      {loading ? (
+        <p className="mt-3 text-center text-xs text-stone-500">Memuat…</p>
+      ) : shown.length === 0 ? (
+        <p className="mt-3 text-xs text-stone-500">Belum ada penilaian pada periode ini.</p>
+      ) : (
+        <>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {shown.map((s) => {
+              const max = Math.max(1, ...s.dist);
+              return (
+                <div key={s.staff_username} className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                  <p className="text-sm font-bold">{staffName(s.staff_username)}</p>
+                  <p className="font-mono text-[11px] text-stone-400">@{s.staff_username}</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-500">
+                    ★ {s.avg.toFixed(1)} <span className="text-xs font-semibold text-stone-400">· {s.count} penilai</span>
+                  </p>
+                  <div className="mt-2 space-y-0.5">
+                    {[5, 4, 3, 2, 1, 0].map((v) => (
+                      <div key={v} className="flex items-center gap-1.5 text-[10px] text-stone-500">
+                        <span className="w-6 shrink-0 font-semibold">{v}★</span>
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-stone-200">
+                          <div className="h-full rounded-full bg-amber-400" style={{ width: `${Math.round(((s.dist[v] ?? 0) / max) * 100)}%` }} />
+                        </div>
+                        <span className="w-5 shrink-0 text-right font-mono">{s.dist[v] ?? 0}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {shownRatings.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {shownRatings.slice(0, 30).map((r, i) => (
+                <div key={`${r.customer_email}-${r.updated_at}-${i}`} className="rounded-2xl bg-white/60 p-3 ring-1 ring-white">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold">
+                      {staffName(r.staff_username)} <span className="font-normal text-stone-400">dinilai {r.customer_email}</span>
+                    </p>
+                    <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-700">
+                      ★ {r.stars}/5
+                    </span>
+                  </div>
+                  {r.message ? (
+                    <p className="mt-1 text-xs text-stone-600">{r.message}</p>
+                  ) : (
+                    <p className="mt-1 text-[11px] italic text-stone-400">(tanpa pesan)</p>
+                  )}
+                  <p className="mt-1 text-[10px] text-stone-400">
+                    {r.updated_at ? new Date(r.updated_at).toLocaleString("id-ID") : "-"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: string; meDivision: string; isAdmin: boolean }) {
   const [settings, setSettings] = useState({ slot_minutes: 30, work_start: "09:00", work_end: "17:00", work_days: "1,2,3,4,5", break_start: "12:00", break_end: "13:00" });
   const [setSaving, setSetSaving] = useState(false);
@@ -1691,6 +1832,7 @@ function SupportManager({ meUsername, meDivision, isAdmin }: { meUsername: strin
       {msg && (
         <p className="rounded-xl bg-white/70 px-4 py-2 text-xs font-medium text-stone-600 ring-1 ring-white">{msg}</p>
       )}
+      <RatingsRecap isAdmin={isAdmin} meUsername={meUsername} meDivision={meDivision} staffOpts={staffOpts} />
       {isAdmin && (
         <form onSubmit={saveSettings} className="glass-strong rounded-3xl p-6">
           <h2 className="text-base font-bold">Pengaturan Booking Support</h2>
